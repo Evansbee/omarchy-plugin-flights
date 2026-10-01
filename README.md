@@ -6,7 +6,7 @@ until three hours after it lands, and you get a notification whenever its
 times, gates, or status change.
 
 ```
-bar:    ✈•                      ← the plane fills as the flight goes; the dot blinks while it's watching
+bar:    ✈)))                    ← plane-shaped echoes ripple out while it's watching
 popup:  ✈ Flights                    🔔 Notify on changes  [■]
         [ Flight number — UA1, WN302 AUS, DL1 10/3      ] [🔍]
 
@@ -65,20 +65,18 @@ arrival.
 
 ## The bar icon
 
-The icon is always one plane, and it shows the most important flight on the
-list. That's a canceled or diverted flight first, then one that's moving,
-then the next one to depart.
+The icon is a single solid plane. While anything is tracked, it sends out
+echoes of itself: a copy of the plane grows outward and fades, like a ripple
+in the plane's own shape. The echoes pulse calmly between checks and quickly
+while a request is in flight. With Font Awesome Pro Regular available, each
+echo is the plane's outline.
 
-- **The fill is where that flight is.** The plane is an outline until the
-  flight leaves. While it's in the air, a solid fill sweeps from tail to nose
-  as it makes progress. Once it lands, the plane is solid.
-- **The dot at the lower right is the tracker itself.** It breathes slowly
-  while anything is tracked and flickers while a request is going out. It
-  turns the theme's urgent color if the flight is 15+ minutes late, canceled,
-  or diverted. A canceled or diverted flight turns the whole plane urgent
-  too.
+The bar shows the most important flight on the list: a canceled or diverted
+flight first, then one that's moving, then the next one to depart. The echo
+turns the theme's urgent color if that flight is 15+ minutes late, canceled,
+or diverted. Canceled and diverted also turn the plane itself urgent.
 
-Set `"animate": false` to keep the dot steady.
+Set `"animate": false` to stop the pulse.
 
 **Icons.** If you have Font Awesome 7 **Pro**, the widget loads it at runtime
 from `iconFont`. The default path is
@@ -86,8 +84,8 @@ from `iconFont`. The default path is
 licensed per person, so it is never copied into this repo. If that file is
 missing, the widget uses Font Awesome 7 Free, which Omarchy installs. If
 Free is missing too, it uses the bar's Nerd Font. The outline plane is Pro
-Regular, read from the same folder. Without it, the empty plane is drawn as
-a faint solid one, because the Free set has no outline plane.
+Regular, read from the same folder. Without it, the echo is a faint solid
+plane, because the Free set has no outline plane.
 
 ## Interactions
 
@@ -116,7 +114,7 @@ Per-widget settings go inline on the widget's entry in
 |---|---|---|
 | `dropAfterHours` | `3` | Hours a landed flight stays on the list. |
 | `changeMinutes` | `10` | How far a departure or arrival time must move before it is announced again. |
-| `animate` | `true` | Blink the status dot while tracking. |
+| `animate` | `true` | Pulse the plane-shaped echo while tracking. |
 | `iconFont` | `"~/Resources/fontawesome_font/otfs/Font Awesome 7 Pro-Solid-900.otf"` | Font Awesome Pro font file. Set it to `""` to use the Free icons. |
 
 The notification switch and the tracked flights are saved in

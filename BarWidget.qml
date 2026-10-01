@@ -6,21 +6,16 @@ import "Model.js" as Model
 
 // The bar icon for the flight tracker, and the host for its popup.
 //
-// Always the one plane, speaking for the most interesting flight on the list
-// (Model.focusFlight), and it says two things:
+// Always the one solid plane. While anything is tracked it sends out echoes
+// of itself: a copy of the plane that grows and fades, so the pulse is in the
+// plane's own shape rather than a generic ring. Slow and calm between polls,
+// quick while a request is actually out. The echo takes the urgent color when
+// the flight the bar speaks for (Model.focusFlight) is late, canceled, or
+// diverted; canceled and diverted turn the plane itself urgent too.
 //
-//   The fill is where that flight is. An outline until it leaves, a solid fill
-//   sweeping tail to nose across the flight, solid once it's down. "Leaves in
-//   two hours" and "halfway to Singapore" read differently at a glance
-//   without a second icon.
-//
-//   The dot at its lower right is the tracker itself. It breathes slowly while
-//   anything is tracked, flickers while a request is actually out, and turns
-//   the urgent color when the flight is late, canceled, or diverted.
-//
-// Icons are Font Awesome 7 Pro when the person has a copy (see `iconFont`):
-// the outline is Pro Regular and the fill Pro Solid. Without Pro the outline
-// is a faint solid plane instead — the Free set has no outline plane.
+// Icons are Font Awesome 7 Pro when the person has a copy (see `iconFont`).
+// With Pro Regular beside it the echo is the plane's outline, which reads as
+// a plane-shaped ripple; without it the echo is a faint solid copy.
 //
 // Everything stateful lives in Service.qml, once per session; this widget is
 // mounted once per monitor and only reads it.
@@ -97,8 +92,6 @@ BarWidget {
   readonly property bool tracking: flights.length > 0
   readonly property bool fetching: service ? service.fetching : false
   readonly property var focusFlight: Model.focusFlight(flights)
-  readonly property real now: service ? service.now : 0
-  readonly property real fill: Model.barFill(focusFlight, now)
   readonly property bool alert: Model.barAlert(focusFlight)
   readonly property bool trouble: !!focusFlight && Model.isTroublePhase(focusFlight.phase)
   readonly property string glyph: iconFor("flying")
@@ -169,107 +162,68 @@ BarWidget {
       else root.togglePanel()
     }
 
-    // A custom icon rather than `text`: the plane is drawn twice (outline,
-    // then the solid fill clipped to the flight's progress) with the status dot
-    // on top. `text` stays set so the button still knows it has content.
+    // A custom icon rather than `text`, so the plane can have echoes behind
+    // it. `text` stays set so the button still knows it has content.
     iconComponent: Component {
       Item {
         id: iconItem
         anchors.fill: parent
 
+        readonly property bool alive: root.tracking && root.animate
         readonly property color ink: root.trouble ? button.activeColor : button.foreground
+        readonly property color echoInk: root.alert ? button.activeColor : button.foreground
         readonly property int glyphSize: Math.round(button.fontSize * (root.iconTier === "nerd" ? 1 : 0.86))
-        // The Nerd plane points up-right; turned, it flies left to right like
-        // the fill does.
-        readonly property real turn: Model.flyingRotation(root.iconTier)
 
-        // Where the glyph's ink actually is inside its text box, so the fill
-        // runs tail to nose rather than across the advance width.
-        TextMetrics {
-          id: inkMetrics
-          font: solidPlane.font
-          text: root.glyph
-        }
-        readonly property real inkLeft: inkMetrics.tightBoundingRect.x
-        readonly property real inkWidth: inkMetrics.tightBoundingRect.width
-        readonly property real inkRight: planeBox.x + inkLeft + inkWidth
-        readonly property real inkBottom: planeBox.y + emptyPlane.baselineOffset
-          + inkMetrics.tightBoundingRect.y + inkMetrics.tightBoundingRect.height
+        // Two echoes half a beat apart, so a quick pulse reads as a ripple.
+        Repeater {
+          model: 2
 
-        Item {
-          id: planeBox
-          anchors.centerIn: parent
-          width: emptyPlane.implicitWidth
-          height: emptyPlane.implicitHeight
-          rotation: iconItem.turn
-
-          // The empty plane: a true outline with Pro, else a faint silhouette.
           Text {
-            id: emptyPlane
+            id: echo
+            required property int index
+            anchors.centerIn: parent
             textFormat: Text.PlainText
             text: root.glyph
-            color: root.hasOutline ? iconItem.ink
-              : Qt.rgba(iconItem.ink.r, iconItem.ink.g, iconItem.ink.b, iconItem.ink.a * 0.38)
+            color: iconItem.echoInk
             font.family: root.iconFamily
             font.weight: root.hasOutline ? Font.Normal : root.iconWeight
             font.pixelSize: iconItem.glyphSize
-            renderType: Text.NativeRendering
-          }
+            // Distance-field rendering, unlike the native hinting the plane
+            // uses, stays smooth while it scales.
+            renderType: Text.QtRendering
+            rotation: iconItem.turn
+            opacity: 0
+            scale: 1
+            visible: iconItem.alive
 
-          // The fill, clipped from the tail.
-          Item {
-            height: parent.height
-            width: root.fill <= 0 ? 0
-              : (root.fill >= 1 ? parent.width : iconItem.inkLeft + iconItem.inkWidth * root.fill)
-            clip: true
+            readonly property int gap: root.fetching ? 120 : 2600
 
-            Behavior on width { NumberAnimation { duration: 700; easing.type: Easing.OutCubic } }
-
-            Text {
-              id: solidPlane
-              textFormat: Text.PlainText
-              text: root.glyph
-              color: iconItem.ink
-              font.family: root.iconFamily
-              font.weight: root.iconWeight
-              font.pixelSize: iconItem.glyphSize
-              renderType: Text.NativeRendering
+            SequentialAnimation {
+              running: iconItem.alive
+              loops: Animation.Infinite
+              PauseAnimation { duration: echo.index * (root.fetching ? 300 : 650) }
+              ParallelAnimation {
+                NumberAnimation { target: echo; property: "scale"; from: 1; to: 1.9; duration: 1250; easing.type: Easing.OutCubic }
+                NumberAnimation { target: echo; property: "opacity"; from: root.hasOutline ? 0.7 : 0.45; to: 0; duration: 1250; easing.type: Easing.InQuad }
+              }
+              PauseAnimation { duration: echo.gap - echo.index * (root.fetching ? 0 : 650) }
+              onRunningChanged: if (!running) { echo.opacity = 0; echo.scale = 1 }
             }
           }
         }
 
-        // The status dot, tucked into the empty corner under the nose.
-        Rectangle {
-          id: dot
-          readonly property int size: Math.max(4, Math.round(iconItem.glyphSize * 0.3))
-          visible: root.tracking
-          width: size
-          height: size
-          radius: size / 2
-          x: Math.round(iconItem.inkRight - size * 0.75)
-          y: Math.round(iconItem.inkBottom - size * 0.95)
-          color: root.alert ? button.activeColor : button.foreground
+        readonly property real turn: Model.flyingRotation(root.iconTier)
 
-          // Breathing between polls...
-          SequentialAnimation on opacity {
-            running: root.tracking && root.animate && !root.fetching
-            loops: Animation.Infinite
-            NumberAnimation { to: 0.2; duration: 1100; easing.type: Easing.InOutSine }
-            NumberAnimation { to: 1; duration: 1100; easing.type: Easing.InOutSine }
-          }
-
-          // ...and a quick flicker while a request is out.
-          SequentialAnimation on opacity {
-            running: root.tracking && root.animate && root.fetching
-            loops: Animation.Infinite
-            NumberAnimation { to: 0.15; duration: 140 }
-            NumberAnimation { to: 1; duration: 140 }
-          }
-
-          Connections {
-            target: root
-            function onAnimateChanged() { if (!root.animate) dot.opacity = 1 }
-          }
+        Text {
+          anchors.centerIn: parent
+          textFormat: Text.PlainText
+          text: root.glyph
+          color: iconItem.ink
+          font.family: root.iconFamily
+          font.weight: root.iconWeight
+          font.pixelSize: iconItem.glyphSize
+          renderType: Text.NativeRendering
+          rotation: iconItem.turn
         }
       }
     }

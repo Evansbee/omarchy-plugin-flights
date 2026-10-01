@@ -818,16 +818,7 @@ function focusFlight(flights) {
   return best
 }
 
-// How full the bar plane is drawn, 0..1: an outline until it leaves, filling
-// tail to nose across the flight, solid once it's down.
-function barFill(flight, nowSec) {
-  if (!flight) return 0
-  if (flight.phase === "landed" || isTroublePhase(flight.phase)) return 1
-  if (flight.phase !== "airborne") return 0
-  return progress(flight, nowSec)
-}
-
-// Whether the bar's status dot should be the urgent color: something has gone
+// Whether the bar's pulse should be the urgent color: something has gone
 // wrong, or the flight is running 15 minutes or more behind.
 function barAlert(flight) {
   if (!flight) return false

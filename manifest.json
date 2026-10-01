@@ -41,7 +41,7 @@
       {
         "key": "animate",
         "type": "boolean",
-        "label": "Blink the status dot while tracking"
+        "label": "Pulse the plane while tracking"
       },
       {
         "key": "iconFont",
