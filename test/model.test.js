@@ -12,7 +12,7 @@ const source = fs.readFileSync(path.join(__dirname, "..", "Model.js"), "utf8")
 const M = new Function(source + "\nreturn {" + [
   "parseQuery", "parseList", "parseDetail", "resolve", "phaseOf", "newTracked",
   "applyPoll", "findRow", "isExpired", "expiresAt", "pollInterval", "clock",
-  "dayLabel", "statusLine", "barIcon", "icon", "progress", "parseState", "serializeState",
+  "dayLabel", "statusLine", "focusFlight", "barFill", "barAlert", "icon", "progress", "parseState", "serializeState",
   "splitResponse", "curlArgv", "duration", "wantsDetail"
 ].join(",") + "}")()
 
@@ -225,13 +225,32 @@ test("state round-trips and drops junk", () => {
   assert.equal(M.parseState("garbage").notifications, true)
 })
 
-test("icons fall through tiers and the bar picks the loudest flight", () => {
+test("icons fall through tiers", () => {
   assert.equal(M.icon("flying", "pro"), "\uf072")
   assert.equal(M.icon("flying", "nerd"), "\u{f001d}")
-  assert.equal(M.icon("nope", "pro"), M.icon("idle", "pro"))
-  assert.equal(M.barIcon([]), "idle")
-  assert.equal(M.barIcon([{ phase: "scheduled" }, { phase: "airborne" }]), "flying")
-  assert.equal(M.barIcon([{ phase: "airborne" }, { phase: "canceled" }]), "canceled")
+  assert.equal(M.icon("nope", "pro"), M.icon("flying", "pro"))
+})
+
+test("bar: the icon speaks for the loudest flight, filling as it flies", () => {
+  const row = scheduledUA1()
+  const waiting = primed(M.newTracked(row, NOW))
+  const flying = Object.assign(primed(M.newTracked(Object.assign({}, row, { schedDep: row.schedDep + 1 }), NOW)), {
+    phase: "airborne",
+    row: Object.assign({}, row, { realDep: NOW - HOUR, estArr: NOW + 3 * HOUR })
+  })
+  const canceled = Object.assign(primed(M.newTracked(row, NOW)), { phase: "canceled" })
+
+  assert.equal(M.focusFlight([]), null)
+  assert.equal(M.focusFlight([waiting, flying]), flying)
+  assert.equal(M.focusFlight([flying, canceled]), canceled)
+
+  assert.equal(M.barFill(waiting, NOW), 0)
+  assert.equal(M.barFill(flying, NOW), 0.25)
+  assert.equal(M.barFill(Object.assign({}, flying, { phase: "landed" }), NOW), 1)
+
+  assert.equal(M.barAlert(waiting), false)
+  assert.equal(M.barAlert(Object.assign({}, waiting, { row: Object.assign({}, row, { estDep: row.schedDep + 20 * 60 }) })), true)
+  assert.equal(M.barAlert(canceled), true)
 })
 
 test("curl response status is split from the body", () => {

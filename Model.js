@@ -30,11 +30,7 @@ var STALE_AFTER = 12 * HOUR
 //   nerd  Material Design glyphs from the Nerd Font every Omarchy bar uses
 // A name missing from a tier falls through to the next one that has it.
 var ICONS = {
-  idle:      { pro: "\ue22d", free: "\ue22d", nerd: "\udb80\udc1d" },  // plane-up
-  scheduled: { pro: "\ue29a", free: "\ue22d", nerd: "\udb86\udc7c" },  // ticket-airline
-  departing: { pro: "\uf5b0", free: "\uf5b0", nerd: "\udb81\uddd5" },  // plane-departure
   flying:    { pro: "\uf072", free: "\uf072", nerd: "\udb80\udc1d" },  // plane (points right)
-  landed:    { pro: "\uf5af", free: "\uf5af", nerd: "\udb81\uddd4" },  // plane-arrival
   alert:     { pro: "\ue556", free: "\ue556", nerd: "\udb86\udc7a" },  // plane-circle-exclamation
   canceled:  { pro: "\ue557", free: "\ue557", nerd: "\udb86\udc7a" },  // plane-circle-xmark
   radar:     { pro: "\ue024", free: "\uf110", nerd: "\udb81\udc37" },  // radar / spinner
@@ -52,7 +48,7 @@ function flyingRotation(tier) {
 }
 
 function icon(name, tier) {
-  var entry = ICONS[name] || ICONS.idle
+  var entry = ICONS[name] || ICONS.flying
   return entry[tier] || entry.nerd
 }
 
@@ -803,28 +799,42 @@ function optionDetail(row, nowSec) {
   return text
 }
 
-function bestPhase(flights) {
-  // Glyph priority for the bar: trouble, then motion, then waiting.
-  var order = ["canceled", "diverted", "airborne", "taxiing", "gate", "landed", "scheduled"]
-  var best = ""
-  var bestRank = order.length
-  for (var i = 0; i < flights.length; i++) {
-    var rank = order.indexOf(flights[i].phase)
-    if (rank !== -1 && rank < bestRank) { bestRank = rank; best = flights[i].phase }
+// The flight the bar icon speaks for: trouble first, then whatever is moving,
+// then whatever is next. Ties go to the earlier departure.
+var FOCUS_ORDER = ["canceled", "diverted", "airborne", "taxiing", "gate", "scheduled", "landed"]
+
+function focusFlight(flights) {
+  var best = null
+  var bestRank = FOCUS_ORDER.length
+  for (var i = 0; i < (flights || []).length; i++) {
+    var f = flights[i]
+    var rank = FOCUS_ORDER.indexOf(f.phase)
+    if (rank === -1) rank = FOCUS_ORDER.length - 1
+    if (rank < bestRank || (rank === bestRank && departureTime(f.row) < departureTime(best.row))) {
+      best = f
+      bestRank = rank
+    }
   }
   return best
 }
 
-function barIcon(flights) {
-  switch (bestPhase(flights)) {
-  case "canceled": return "canceled"
-  case "diverted": return "alert"
-  case "airborne": return "flying"
-  case "taxiing": case "gate": return "departing"
-  case "landed": return "landed"
-  case "scheduled": return "scheduled"
-  }
-  return "idle"
+// How full the bar plane is drawn, 0..1: an outline until it leaves, filling
+// tail to nose across the flight, solid once it's down.
+function barFill(flight, nowSec) {
+  if (!flight) return 0
+  if (flight.phase === "landed" || isTroublePhase(flight.phase)) return 1
+  if (flight.phase !== "airborne") return 0
+  return progress(flight, nowSec)
+}
+
+// Whether the bar's status dot should be the urgent color: something has gone
+// wrong, or the flight is running 15 minutes or more behind.
+function barAlert(flight) {
+  if (!flight) return false
+  if (isTroublePhase(flight.phase)) return true
+  if (flight.phase === "landed") return false
+  if (phaseRank(flight.phase) < phaseRank("airborne")) return delayMinutes(flight.row) >= 15
+  return arrivalDelayMinutes(flight.row) >= 15
 }
 
 function tooltip(flights, nowSec, error) {

@@ -6,17 +6,21 @@ import "Model.js" as Model
 
 // The bar icon for the flight tracker, and the host for its popup.
 //
-// One icon, chosen by the most interesting flight on the list: an alert for a
-// cancellation or diversion, the plane while one is in the air, departure
-// while one is at the gate or taxiing, arrival once one is down, and an
-// airline ticket while everything is still on the timetable.
+// Always the one plane, speaking for the most interesting flight on the list
+// (Model.focusFlight), and it says two things:
 //
-// Icons are Font Awesome 7 Pro when the person has a copy (see `iconFont`),
-// else the Free set Omarchy installs, else the bar's Nerd Font — Model.ICONS.
+//   The fill is where that flight is. An outline until it leaves, a solid fill
+//   sweeping tail to nose across the flight, solid once it's down. "Leaves in
+//   two hours" and "halfway to Singapore" read differently at a glance
+//   without a second icon.
 //
-// While anything is being tracked the glyph is alive: it bobs gently, and a
-// radar ring pings out from behind it — slowly between polls, quickly while a
-// request is actually in flight — so a glance at the bar says "still looking".
+//   The dot at its lower right is the tracker itself. It breathes slowly while
+//   anything is tracked, flickers while a request is actually out, and turns
+//   the urgent color when the flight is late, canceled, or diverted.
+//
+// Icons are Font Awesome 7 Pro when the person has a copy (see `iconFont`):
+// the outline is Pro Regular and the fill Pro Solid. Without Pro the outline
+// is a faint solid plane instead — the Free set has no outline plane.
 //
 // Everything stateful lives in Service.qml, once per session; this widget is
 // mounted once per monitor and only reads it.
@@ -32,12 +36,20 @@ BarWidget {
     var path = String(setting("iconFont", "~/Resources/fontawesome_font/otfs/Font Awesome 7 Pro-Solid-900.otf"))
     return path.indexOf("~/") === 0 ? Quickshell.env("HOME") + path.slice(1) : path
   }
+  // The outline face sits next to the solid one in a Font Awesome download.
+  readonly property string outlineFontPath: iconFontPath.replace("Solid-900", "Regular-400")
 
   // ---- Icon font. The Pro font is licensed to the person, so it is read from
   //      their disk at runtime and never shipped with the plugin.
   FontLoader {
     id: proFont
     source: root.iconFontPath !== "" ? "file://" + root.iconFontPath : ""
+  }
+
+  FontLoader {
+    id: proOutlineFont
+    source: root.outlineFontPath !== "" && root.outlineFontPath !== root.iconFontPath
+      ? "file://" + root.outlineFontPath : ""
   }
 
   readonly property bool freeInstalled: Qt.fontFamilies().indexOf("Font Awesome 7 Free") !== -1
@@ -48,6 +60,9 @@ BarWidget {
   // Both Font Awesome files are the Solid (900) face; the Free family also has
   // a 400 face that lacks most of these icons, so the weight must be asked for.
   readonly property int iconWeight: iconTier === "nerd" ? Font.Normal : Font.Black
+  // Pro Regular is the same family at 400; with it loaded the empty plane can
+  // be a real outline.
+  readonly property bool hasOutline: iconTier === "pro" && proOutlineFont.status === FontLoader.Ready
 
   function iconFor(name) { return Model.icon(name, root.iconTier) }
 
@@ -81,9 +96,12 @@ BarWidget {
   readonly property var flights: service ? service.sortedFlights : []
   readonly property bool tracking: flights.length > 0
   readonly property bool fetching: service ? service.fetching : false
-  readonly property string phase: Model.bestPhase(flights)
-  readonly property bool trouble: phase === "canceled" || phase === "diverted"
-  readonly property string glyph: iconFor(Model.barIcon(flights))
+  readonly property var focusFlight: Model.focusFlight(flights)
+  readonly property real now: service ? service.now : 0
+  readonly property real fill: Model.barFill(focusFlight, now)
+  readonly property bool alert: Model.barAlert(focusFlight)
+  readonly property bool trouble: !!focusFlight && Model.isTroublePhase(focusFlight.phase)
+  readonly property string glyph: iconFor("flying")
 
   // ---- Popup plumbing. Shape contract for shell.summon/hide/toggle routing:
   //      Bar.findPanelWidget requires open/close/opened on the widget root.
@@ -151,75 +169,106 @@ BarWidget {
       else root.togglePanel()
     }
 
-    // A custom icon rather than `text`, so the glyph can move and can be
-    // drawn in the icon font at the weight it needs. `text` stays set so the
-    // button still knows it has content.
+    // A custom icon rather than `text`: the plane is drawn twice (outline,
+    // then the solid fill clipped to the flight's progress) with the status dot
+    // on top. `text` stays set so the button still knows it has content.
     iconComponent: Component {
       Item {
         id: iconItem
         anchors.fill: parent
 
-        readonly property bool alive: root.tracking && root.animate
         readonly property color ink: root.trouble ? button.activeColor : button.foreground
+        readonly property int glyphSize: Math.round(button.fontSize * (root.iconTier === "nerd" ? 1 : 0.86))
+        // The Nerd plane points up-right; turned, it flies left to right like
+        // the fill does.
+        readonly property real turn: Model.flyingRotation(root.iconTier)
 
-        // Radar ping: a ring that grows out from the plane and fades. Two of
-        // them, half a beat apart, so a fast ping reads as a sweep.
-        Repeater {
-          model: 2
+        // Where the glyph's ink actually is inside its text box, so the fill
+        // runs tail to nose rather than across the advance width.
+        TextMetrics {
+          id: inkMetrics
+          font: solidPlane.font
+          text: root.glyph
+        }
+        readonly property real inkLeft: inkMetrics.tightBoundingRect.x
+        readonly property real inkWidth: inkMetrics.tightBoundingRect.width
+        readonly property real inkRight: planeBox.x + inkLeft + inkWidth
+        readonly property real inkBottom: planeBox.y + emptyPlane.baselineOffset
+          + inkMetrics.tightBoundingRect.y + inkMetrics.tightBoundingRect.height
 
-          Rectangle {
-            id: ring
-            required property int index
-            anchors.centerIn: parent
-            width: iconItem.width
-            height: width
-            radius: width / 2
-            color: "transparent"
-            border.width: 1
-            border.color: iconItem.ink
-            opacity: 0
-            scale: 0.3
-            visible: iconItem.alive
+        Item {
+          id: planeBox
+          anchors.centerIn: parent
+          width: emptyPlane.implicitWidth
+          height: emptyPlane.implicitHeight
+          rotation: iconItem.turn
 
-            SequentialAnimation {
-              running: iconItem.alive
-              loops: Animation.Infinite
-              PauseAnimation { duration: ring.index * (root.fetching ? 350 : 1100) }
-              ParallelAnimation {
-                NumberAnimation { target: ring; property: "scale"; from: 0.3; to: 1.35; duration: 1300; easing.type: Easing.OutCubic }
-                NumberAnimation { target: ring; property: "opacity"; from: 0.55; to: 0; duration: 1300; easing.type: Easing.InQuad }
-              }
-              // Slow and calm between polls; quick while a request is out.
-              PauseAnimation { duration: root.fetching ? 100 : 2400 - ring.index * 1100 }
-              onRunningChanged: if (!running) { ring.opacity = 0; ring.scale = 0.3 }
+          // The empty plane: a true outline with Pro, else a faint silhouette.
+          Text {
+            id: emptyPlane
+            textFormat: Text.PlainText
+            text: root.glyph
+            color: root.hasOutline ? iconItem.ink
+              : Qt.rgba(iconItem.ink.r, iconItem.ink.g, iconItem.ink.b, iconItem.ink.a * 0.38)
+            font.family: root.iconFamily
+            font.weight: root.hasOutline ? Font.Normal : root.iconWeight
+            font.pixelSize: iconItem.glyphSize
+            renderType: Text.NativeRendering
+          }
+
+          // The fill, clipped from the tail.
+          Item {
+            height: parent.height
+            width: root.fill <= 0 ? 0
+              : (root.fill >= 1 ? parent.width : iconItem.inkLeft + iconItem.inkWidth * root.fill)
+            clip: true
+
+            Behavior on width { NumberAnimation { duration: 700; easing.type: Easing.OutCubic } }
+
+            Text {
+              id: solidPlane
+              textFormat: Text.PlainText
+              text: root.glyph
+              color: iconItem.ink
+              font.family: root.iconFamily
+              font.weight: root.iconWeight
+              font.pixelSize: iconItem.glyphSize
+              renderType: Text.NativeRendering
             }
           }
         }
 
-        Text {
-          id: plane
-          anchors.centerIn: parent
-          textFormat: Text.PlainText
-          text: root.glyph
-          color: iconItem.ink
-          font.family: root.iconFamily
-          font.weight: root.iconWeight
-          // Font Awesome draws larger than the Nerd glyphs at one pixel size.
-          font.pixelSize: Math.round(button.fontSize * (root.iconTier === "nerd" ? 1 : 0.86))
-          renderType: Text.NativeRendering
+        // The status dot, tucked into the empty corner under the nose.
+        Rectangle {
+          id: dot
+          readonly property int size: Math.max(4, Math.round(iconItem.glyphSize * 0.3))
+          visible: root.tracking
+          width: size
+          height: size
+          radius: size / 2
+          x: Math.round(iconItem.inkRight - size * 0.75)
+          y: Math.round(iconItem.inkBottom - size * 0.95)
+          color: root.alert ? button.activeColor : button.foreground
 
-          // The bob. A pixel and a half each way is enough to read as motion
-          // at a glance without making the bar feel busy.
-          property real bob: 0
-          transform: Translate { y: plane.bob }
-
-          SequentialAnimation on bob {
-            running: iconItem.alive
+          // Breathing between polls...
+          SequentialAnimation on opacity {
+            running: root.tracking && root.animate && !root.fetching
             loops: Animation.Infinite
-            NumberAnimation { from: 0; to: -1.5; duration: 900; easing.type: Easing.InOutSine }
-            NumberAnimation { from: -1.5; to: 1.5; duration: 1800; easing.type: Easing.InOutSine }
-            NumberAnimation { from: 1.5; to: 0; duration: 900; easing.type: Easing.InOutSine }
-            onRunningChanged: if (!running) plane.bob = 0
+            NumberAnimation { to: 0.2; duration: 1100; easing.type: Easing.InOutSine }
+            NumberAnimation { to: 1; duration: 1100; easing.type: Easing.InOutSine }
+          }
+
+          // ...and a quick flicker while a request is out.
+          SequentialAnimation on opacity {
+            running: root.tracking && root.animate && root.fetching
+            loops: Animation.Infinite
+            NumberAnimation { to: 0.15; duration: 140 }
+            NumberAnimation { to: 1; duration: 140 }
+          }
+
+          Connections {
+            target: root
+            function onAnimateChanged() { if (!root.animate) dot.opacity = 1 }
           }
         }
       }
