@@ -114,6 +114,10 @@ function parseQuery(text, nowSec) {
   for (var i = 0; i < tokens.length; i++) {
     var token = tokens[i]
     if (!token || token === "-" || token === "TO" || token === "FROM" || token === "ON") continue
+    // A month name next to a day number is a date even though "DEC" is also
+    // an airport (Decatur): "DEC 15", "15 DEC", optionally then a year.
+    var named = parseNamedDate(tokens, i, nowSec)
+    if (named) { date = named.day; i += named.used - 1; continue }
     if (/^[A-Z]{3}$/.test(token)) { airports.push(token); continue }
     var parsed = parseDateToken(token, nowSec)
     if (parsed) { date = parsed; continue }
@@ -148,6 +152,36 @@ function parseDateToken(token, nowSec) {
     return day
   }
   return null
+}
+
+var MONTHS_BY_NAME = {
+  JAN: 1, FEB: 2, MAR: 3, APR: 4, MAY: 5, JUN: 6, JUL: 7, AUG: 8, SEP: 9, SEPT: 9, OCT: 10, NOV: 11, DEC: 12,
+  JANUARY: 1, FEBRUARY: 2, MARCH: 3, APRIL: 4, JUNE: 6, JULY: 7, AUGUST: 8, SEPTEMBER: 9,
+  OCTOBER: 10, NOVEMBER: 11, DECEMBER: 12
+}
+
+// -> { day, used } when tokens[i] starts a "Dec 15" / "15 Dec" date.
+function parseNamedDate(tokens, i, nowSec) {
+  var a = tokens[i], b = tokens[i + 1] || ""
+  var month = 0, dayOfMonth = 0
+  var dayRe = /^([0-9]{1,2})(ST|ND|RD|TH)?$/
+  if (MONTHS_BY_NAME[a] && dayRe.test(b)) { month = MONTHS_BY_NAME[a]; dayOfMonth = +dayRe.exec(b)[1] }
+  else if (dayRe.test(a) && MONTHS_BY_NAME[b]) { month = MONTHS_BY_NAME[b]; dayOfMonth = +dayRe.exec(a)[1] }
+  else return null
+
+  var used = 2
+  var year = 0
+  if (/^[0-9]{4}$/.test(tokens[i + 2] || "")) { year = +tokens[i + 2]; used = 3 }
+  var today = todayDay(nowSec)
+  var day = validDay(year || today.y, month, dayOfMonth)
+  if (!day) return null
+  if (!year && dayNumber(day) < dayNumber(today) - 7) day.y += 1
+  return { day: day, used: used }
+}
+
+function todayDay(nowSec) {
+  var now = new Date((nowSec || Date.now() / 1000) * 1000)
+  return { y: now.getFullYear(), m: now.getMonth() + 1, d: now.getDate() }
 }
 
 function validDay(y, m, d) {
@@ -316,7 +350,25 @@ function isTroublePhase(phase) {
 
 // Best known times: what happened, else what is expected, else the timetable.
 function departureTime(row) { return row ? (row.realDep || row.estDep || row.schedDep) : 0 }
-function arrivalTime(row) { return row ? (row.realArr || row.estArr || row.schedArr) : 0 }
+// FR24 often moves the departure estimate long before it publishes a new
+// arrival one. Pairing a late departure with the timetable arrival makes a
+// 90-minute flight look like a 3-minute one, so until there's a real
+// estimate the arrival slides by however much the departure did.
+function arrivalTime(row) {
+  if (!row) return 0
+  if (row.realArr) return row.realArr
+  if (row.estArr) return row.estArr
+  var dep = row.realDep || row.estDep
+  if (dep && row.schedDep && row.schedArr) return row.schedArr + (dep - row.schedDep)
+  return row.schedArr
+}
+
+// True when arrivalTime() is that slide rather than anything FR24 said.
+function arrivalProjected(row) {
+  if (!row || row.realArr || row.estArr) return false
+  var dep = row.realDep || row.estDep
+  return !!dep && !!row.schedDep && dep !== row.schedDep
+}
 
 function delayMinutes(row) {
   if (!row || !row.schedDep) return 0
@@ -326,8 +378,7 @@ function delayMinutes(row) {
 
 function arrivalDelayMinutes(row) {
   if (!row || !row.schedArr) return 0
-  var arr = row.realArr || row.estArr
-  return arr ? Math.round((arr - row.schedArr) / MINUTE) : 0
+  return Math.round((arrivalTime(row) - row.schedArr) / MINUTE)
 }
 
 // When a landed flight touched down, as precisely as FR24 will say.
@@ -613,7 +664,10 @@ function applyPoll(tracked, listRow, detail, nowSec, thresholdMinutes) {
   }
 
   var arr = arrivalTime(row)
-  if (phase !== "landed" && !isTroublePhase(phase) && Math.abs(arr - told.arr) >= threshold) {
+  if (arrivalProjected(row)) {
+    // Only the departure moved, and that has its own announcement.
+    told.arr = arr
+  } else if (phase !== "landed" && !isTroublePhase(phase) && Math.abs(arr - told.arr) >= threshold) {
     events.push({
       title: row.number + " arrival " + (arr > told.arr ? "later" : "earlier"),
       body: "Now " + clock(arr, row.destination) + " in " + row.destination.iata
@@ -704,6 +758,117 @@ function gateText(place) {
 }
 
 // ---------------------------------------------------------------------------
+// Planned flights: a flight number and a day too far out for Flightradar24,
+// which only lists about a week ahead. They wait on their own list, checked
+// once a day (every few hours once close), and become tracked flights the
+// moment the schedule shows up.
+
+// With no rows to go by, dates further out than this are assumed to be past
+// the schedule horizon rather than days the flight doesn't operate.
+var HORIZON_DAYS = 6
+
+function lastListedDay(rows) {
+  var last = -Infinity
+  for (var i = 0; i < (rows || []).length; i++) last = Math.max(last, dayNumber(originDay(rows[i])))
+  return last
+}
+
+// A lookup with a date that came back empty: is that because the date is
+// beyond what Flightradar24 publishes yet?
+function shouldPlan(query, rows, nowSec) {
+  if (!query || !query.date) return false
+  var target = dayNumber(query.date)
+  var today = dayNumber(todayDay(nowSec))
+  if (target <= today) return false
+  if (!rows || rows.length === 0) return target - today > HORIZON_DAYS
+  return target > lastListedDay(rows)
+}
+
+function planKey(plan) {
+  return "plan|" + plan.number + "|" + plan.date.y + "-" + pad(plan.date.m) + "-" + pad(plan.date.d)
+    + (plan.airports.length ? "|" + plan.airports.join("-") : "")
+}
+
+// The route a plan will probably fly, from the routes the number flies now.
+function guessRoute(rows, airports) {
+  if (airports && airports.length === 2) return { origin: airports[0], destination: airports[1] }
+  var seen = {}, routes = []
+  for (var i = 0; i < (rows || []).length; i++) {
+    var r = rows[i]
+    if (!matchesAirports(r, airports)) continue
+    var key = routeKey(r)
+    if (seen[key]) continue
+    seen[key] = true
+    routes.push({ origin: r.origin.iata, destination: r.destination.iata })
+  }
+  return routes.length === 1 ? routes[0] : null
+}
+
+function newPlan(query, rows, nowSec) {
+  var plan = {
+    number: query.number,
+    date: query.date,
+    airports: query.airports || [],
+    addedAt: nowSec,
+    lastChecked: nowSec,
+    guess: guessRoute(rows, query.airports),
+    choices: [],
+    asked: false
+  }
+  plan.key = planKey(plan)
+  return plan
+}
+
+function planQuery(plan) {
+  return { ok: true, number: plan.number, airports: plan.airports, date: plan.date }
+}
+
+function daysUntil(day, nowSec) {
+  return dayNumber(day) - dayNumber(todayDay(nowSec))
+}
+
+function planInterval(plan, nowSec) {
+  return daysUntil(plan.date, nowSec) <= 9 ? 3 * HOUR : 24 * HOUR
+}
+
+function planDue(plan, nowSec) {
+  if (plan.choices && plan.choices.length > 0) return false  // waiting on the person
+  return !plan.lastChecked || nowSec - plan.lastChecked >= planInterval(plan, nowSec)
+}
+
+function planExpired(plan, nowSec) {
+  return daysUntil(plan.date, nowSec) < -1
+}
+
+function dateText(day) {
+  var d = new Date(Date.UTC(day.y, day.m - 1, day.d))
+  return DAYS[d.getUTCDay()] + " " + MONTHS[d.getUTCMonth()] + " " + d.getUTCDate()
+}
+
+function planRouteText(plan) {
+  if (plan.airports.length === 2) return plan.airports[0] + " → " + plan.airports[1]
+  if (plan.guess) return plan.guess.origin + " → " + plan.guess.destination
+  if (plan.airports.length === 1) return "via " + plan.airports[0]
+  return "Route not known yet"
+}
+
+function planStatus(plan, nowSec) {
+  if (plan.choices && plan.choices.length > 0) return "On the schedule. Pick a leg below."
+  var days = daysUntil(plan.date, nowSec)
+  var when = days <= 0 ? "today" : (days === 1 ? "tomorrow" : "in " + days + " days")
+  return "Flies " + when + " · tracking starts when the schedule is published (about a week out)"
+}
+
+// A tooltip line for upcoming flights, or "" with none.
+function plansTooltip(plans, nowSec) {
+  if (!plans || plans.length === 0) return ""
+  var parts = []
+  for (var i = 0; i < plans.length; i++)
+    parts.push(plans[i].number + " " + dateText(plans[i].date))
+  return "Upcoming: " + parts.join(", ")
+}
+
+// ---------------------------------------------------------------------------
 // Progress along the route, 0..1, for the little plane on the panel's line.
 
 function progress(tracked, nowSec) {
@@ -717,6 +882,24 @@ function progress(tracked, nowSec) {
   return Math.max(0.02, Math.min(0.98, (nowSec - start) / (end - start)))
 }
 
+// The label in the middle of the route line: how long the flight is before
+// it leaves, how long is left while it's up, how long it took once down.
+function durationLabel(tracked, nowSec) {
+  var row = tracked.row
+  var phase = tracked.phase
+  if (phase === "canceled") return ""
+  if (phase === "airborne") {
+    var left = arrivalTime(row) - nowSec
+    return left > 0 ? duration(left) + " left" : "arriving"
+  }
+  if (phase === "landed") {
+    var took = (row.realArr || landedAt(row)) - (row.realDep || row.schedDep)
+    return took > 0 ? "flew " + duration(took) : ""
+  }
+  var total = arrivalTime(row) - departureTime(row)
+  return total > 0 ? duration(total) : ""
+}
+
 // ---------------------------------------------------------------------------
 // Formatting
 
@@ -725,11 +908,12 @@ function pad(n) { return n < 10 ? "0" + n : String(n) }
 var DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
 var MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
 
-// "22:40" in the airport's own zone.
+// "10:40 PM" in the airport's own zone.
 function clock(sec, place) {
   if (!sec) return "--:--"
   var d = new Date((sec + (place ? place.tzOffset : 0)) * 1000)
-  return pad(d.getUTCHours()) + ":" + pad(d.getUTCMinutes())
+  var h = d.getUTCHours()
+  return ((h % 12) || 12) + ":" + pad(d.getUTCMinutes()) + (h < 12 ? " AM" : " PM")
 }
 
 // "Today", "Tomorrow", "Thu Oct 8" — relative to now *in the airport's zone*.
@@ -851,12 +1035,13 @@ function serializeState(state) {
   return JSON.stringify({
     version: STATE_VERSION,
     notifications: state.notifications !== false,
-    flights: state.flights || []
+    flights: state.flights || [],
+    plans: state.plans || []
   }, null, 2) + "\n"
 }
 
 function parseState(raw) {
-  var fallback = { notifications: true, flights: [] }
+  var fallback = { notifications: true, flights: [], plans: [] }
   var data
   try { data = JSON.parse(String(raw || "")) } catch (e) { return fallback }
   if (!data || typeof data !== "object") return fallback
@@ -866,5 +1051,14 @@ function parseState(raw) {
     var f = list[i]
     if (f && f.key && f.row && f.row.origin && f.row.destination && f.told) flights.push(f)
   }
-  return { notifications: data.notifications !== false, flights: flights }
+  var plans = []
+  var planList = Array.isArray(data.plans) ? data.plans : []
+  for (var j = 0; j < planList.length; j++) {
+    var p = planList[j]
+    if (p && p.key && p.number && p.date && p.date.y && Array.isArray(p.airports)) {
+      if (!Array.isArray(p.choices)) p.choices = []
+      plans.push(p)
+    }
+  }
+  return { notifications: data.notifications !== false, flights: flights, plans: plans }
 }

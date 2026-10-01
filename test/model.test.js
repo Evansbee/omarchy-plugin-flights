@@ -13,7 +13,7 @@ const M = new Function(source + "\nreturn {" + [
   "parseQuery", "parseList", "parseDetail", "resolve", "phaseOf", "newTracked",
   "applyPoll", "findRow", "isExpired", "expiresAt", "pollInterval", "clock",
   "dayLabel", "statusLine", "focusFlight", "icon", "progress", "parseState", "serializeState",
-  "splitResponse", "curlArgv", "duration", "wantsDetail"
+  "splitResponse", "curlArgv", "shouldPlan", "newPlan", "planDue", "planExpired", "planRouteText", "durationLabel", "arrivalTime", "arrivalProjected", "duration", "wantsDetail"
 ].join(",") + "}")()
 
 const fixture = (name) => fs.readFileSync(path.join(__dirname, "fixtures", name), "utf8")
@@ -122,7 +122,7 @@ test("applyPoll: a departure delay past the threshold notifies once", () => {
   out = M.applyPoll(tracked, big, null, NOW + 120, 10)
   assert.equal(out.events.length, 1)
   assert.match(out.events[0].title, /UA1 departure delayed/)
-  assert.match(out.events[0].body, /was 22:40/)
+  assert.match(out.events[0].body, /was 10:40 PM/)
   tracked = out.tracked
 
   out = M.applyPoll(tracked, big, null, NOW + 180, 10)
@@ -210,18 +210,69 @@ test("poll cadence tightens near departure", () => {
 
 test("formatting: airport-local clocks and day labels", () => {
   const row = scheduledUA1()
-  assert.equal(M.clock(row.schedDep, row.origin), "22:40")     // PDT
+  assert.equal(M.clock(row.schedDep, row.origin), "10:40 PM")  // PDT
+  assert.equal(M.clock(row.schedDep + 2 * HOUR, row.origin), "12:40 AM")
   assert.equal(M.dayLabel(row.schedDep, row.origin, NOW), "Today")
   assert.equal(M.duration(95 * 60), "1h 35m")
   assert.equal(M.duration(120 * 60), "2h")
   assert.match(M.statusLine(primed(M.newTracked(row, NOW)), NOW), /^Departs in 3h/)
 })
 
+test("durationLabel: total before, remaining in the air, flown after", () => {
+  const row = scheduledUA1()
+  const waiting = primed(M.newTracked(row, NOW))
+  assert.equal(M.durationLabel(waiting, NOW), M.duration(row.schedArr - row.schedDep))
+  const flying = Object.assign({}, waiting, { phase: "airborne",
+    row: Object.assign({}, row, { realDep: NOW - HOUR, estArr: NOW + 2 * HOUR + 15 * 60 }) })
+  assert.equal(M.durationLabel(flying, NOW), "2h 15m left")
+  const landed = Object.assign({}, flying, { phase: "landed",
+    row: Object.assign({}, flying.row, { realArr: NOW + 2 * HOUR }) })
+  assert.equal(M.durationLabel(landed, NOW), "flew 3h")
+})
+
+test("arrival slides with a late departure until FR24 estimates it", () => {
+  // DL2402 as it was: departure 1h34m late, no arrival estimate.
+  const row = { schedDep: 1790818500, schedArr: 1790824320, estDep: 1790824140, estArr: 0, realDep: 0, realArr: 0 }
+  assert.equal(M.arrivalTime(row), 1790824320 + (1790824140 - 1790818500))
+  assert.equal(M.arrivalProjected(row), true)
+  assert.equal(M.arrivalTime(Object.assign({}, row, { estArr: 1790830000 })), 1790830000)
+  assert.equal(M.arrivalProjected(Object.assign({}, row, { estArr: 1790830000 })), false)
+  assert.equal(M.arrivalProjected(Object.assign({}, row, { estDep: 0 })), false)
+})
+
+test("parseQuery: month names, even ones that are also airports", () => {
+  assert.deepEqual(M.parseQuery("UA1 Dec 15", NOW).date, { y: 2026, m: 12, d: 15 })
+  assert.deepEqual(M.parseQuery("UA1 15 december", NOW).date, { y: 2026, m: 12, d: 15 })
+  assert.deepEqual(M.parseQuery("UA1 SFO jan 3", NOW).date, { y: 2027, m: 1, d: 3 })
+  assert.deepEqual(M.parseQuery("UA1 SFO jan 3", NOW).airports, ["SFO"])
+  assert.deepEqual(M.parseQuery("UA1 DEC", NOW).airports, ["DEC"])
+})
+
+test("plans: dates past the published schedule wait instead of failing", () => {
+  const rows = M.parseList(fixture("list-UA1.json"))   // listed through Oct 8 (PDT)
+  const far = M.parseQuery("UA1 11/20", NOW)
+  assert.equal(M.resolve(rows, far, NOW).kind, "none")
+  assert.equal(M.shouldPlan(far, rows, NOW), true)
+  assert.equal(M.shouldPlan(M.parseQuery("UA1 10/5", NOW), rows, NOW), false, "inside the window: it just doesn't fly")
+  assert.equal(M.shouldPlan(M.parseQuery("UA1 2026-09-01", NOW), rows, NOW), false, "the past")
+  assert.equal(M.shouldPlan(M.parseQuery("ZZ9 11/20", NOW), [], NOW), true)
+
+  const plan = M.newPlan(far, rows, NOW)
+  assert.equal(plan.key, "plan|UA1|2026-11-20")
+  assert.equal(M.planRouteText(plan), "SFO → SIN")
+  assert.equal(M.planDue(plan, NOW + 3600), false)
+  assert.equal(M.planDue(plan, NOW + 25 * HOUR), true)
+  assert.equal(M.planExpired(plan, NOW), false)
+  assert.equal(M.planExpired(plan, NOW + 60 * 24 * HOUR), true)
+})
+
 test("state round-trips and drops junk", () => {
   const tracked = M.newTracked(scheduledUA1(), NOW)
-  const state = M.parseState(M.serializeState({ notifications: false, flights: [tracked, { nope: 1 }] }))
+  const plan = M.newPlan(M.parseQuery("UA1 11/20", NOW), [], NOW)
+  const state = M.parseState(M.serializeState({ notifications: false, flights: [tracked, { nope: 1 }], plans: [plan, {}] }))
   assert.equal(state.notifications, false)
   assert.equal(state.flights.length, 1)
+  assert.equal(state.plans.length, 1)
   assert.equal(M.parseState("garbage").notifications, true)
 })
 

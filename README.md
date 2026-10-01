@@ -12,7 +12,8 @@ popup:  ✈ Flights                    🔔 Notify on changes  [■]
 
         DL1  Delta Air Lines · Airbus A330-223             In the air
         JFK ━━━━━━━✈┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄ LHR
-        20:49 20:15                                    08:50 08:14
+                                   4h 51m left
+        8:49 PM 8:15 PM                              8:50 AM 8:14 AM
         Departed · Today EDT · Gate B22   Gate 1 · Today BST · Arrives
         Lands in 4h 51m
 ```
@@ -25,12 +26,23 @@ popup:  ✈ Flights                    🔔 Notify on changes  [■]
 | `WN302` | The panel asks which one when the number flies more than one route in a single trip, such as MCI→AUS followed by AUS→DAL. |
 | `WN302 AUS` | The leg that starts or ends at AUS. |
 | `WN302 MCI-AUS` | That exact leg. |
-| `DL1 10/3`, `DL1 2026-10-03`, `DL1 tomorrow` | That day's departure. The date is matched in the **origin airport's** local time, which is the date printed on the boarding pass. |
+| `DL1 10/3`, `DL1 Dec 15`, `DL1 2026-10-03`, `DL1 tomorrow` | That day's departure. The date is matched in the **origin airport's** local time, which is the date printed on the boarding pass. A date with no year that has already passed means next year. |
 
 Flight numbers can be written as `UA1`, `ua 1`, or `AA0100`. A daily flight
 repeats every 24 hours, so it never triggers the question. The question only
 comes up when one number flies different routes within 18 hours of each
 other.
+
+## Flights weeks out
+
+Flightradar24 only publishes schedules about a week ahead. A date beyond
+that, like `UA1 Dec 15`, goes onto the **Upcoming** list instead of
+failing. The entry shows the flight's usual route when the number flies
+only one. It's checked once a day, and every three hours from nine days out.
+As soon as the schedule includes it, it becomes a normal tracked flight and
+you get a notification. If that day's number flies more than one route, the
+card asks you to pick one and sends a notification. Upcoming entries that
+never appeared are dropped a day after their date.
 
 ## What it watches
 
@@ -49,7 +61,11 @@ any of the following:
   anything happens.
 - **Departure time** moving by `changeMinutes` or more. Once the flight has
   departed, departure-time changes are no longer announced.
-- **Arrival time** moving by `changeMinutes` or more. Each change is measured
+- **Arrival time** moving by `changeMinutes` or more. Flightradar24 often
+  moves a delayed departure before it publishes a new arrival estimate. Until
+  it does, the arrival is projected forward by the same delay and labeled
+  *Projected*. That projection isn't announced separately, because the
+  departure notification already covers it. Each change is measured
   against the last time you were *told*, not the last poll. An estimate that
   drifts one minute per poll is announced once per threshold crossed instead
   of never.

@@ -27,6 +27,7 @@ Panel {
 
   readonly property var service: hostWidget ? hostWidget.service : null
   readonly property var flights: service ? service.sortedFlights : []
+  readonly property var plans: service ? service.plans : []
   readonly property var options: service ? service.lookupOptions : []
   readonly property bool choosing: options.length > 0
   readonly property real now: service ? service.now : Date.now() / 1000
@@ -44,8 +45,8 @@ Panel {
   function iconFor(name) { return Model.icon(name, root.iconTier) }
 
   // ---- Cursor over whichever list is showing: the legs being chosen
-  //      between, or the tracked flights.
-  readonly property int rowCount: choosing ? options.length : flights.length
+  //      between, or the tracked flights followed by the upcoming ones.
+  readonly property int rowCount: choosing ? options.length : flights.length + plans.length
   property int selectedIndex: -1
 
   function focusField() {
@@ -71,9 +72,12 @@ Panel {
   }
 
   function deleteCursor() {
-    if (root.choosing || root.selectedIndex < 0 || root.selectedIndex >= root.flights.length) return
-    removeFlight(root.flights[root.selectedIndex].key)
-    if (root.selectedIndex >= root.flights.length - 1) root.selectedIndex = root.flights.length - 2
+    if (root.choosing || root.selectedIndex < 0 || root.selectedIndex >= root.rowCount) return
+    var i = root.selectedIndex
+    if (i < root.flights.length) removeFlight(root.flights[i].key)
+    else if (root.service) root.service.removePlan(root.plans[i - root.flights.length].key)
+    // rowCount has already dropped by one.
+    if (root.selectedIndex >= root.rowCount) root.selectedIndex = root.rowCount - 1
     if (root.selectedIndex < 0) focusField()
   }
 
@@ -236,7 +240,7 @@ Panel {
               anchors.left: parent.left
               anchors.right: goButton.left
               anchors.rightMargin: Style.spacing.md
-              placeholderText: "Flight number — UA1, WN302 AUS, DL1 10/3"
+              placeholderText: "Flight number — UA1, WN302 AUS, DL1 Dec 15"
               foreground: root.contentForeground
               accent: root.accentColor
               font.family: root.contentFontFamily
@@ -292,7 +296,7 @@ Panel {
             text: error !== "" ? error
               : (notice !== "" ? notice
               : (root.service && root.service.lookupBusy ? "Looking it up…"
-              : "Enter tracks the next departure, or the one in the air now. Add an airport or a date to pick a different one."))
+              : "Enter tracks the next departure, or the one in the air now. Add an airport to pick a leg, or a date, even weeks out, to watch a later flight."))
             color: error !== "" ? root.urgentColor : (notice !== "" ? root.accentColor : root.faintColor)
             font.family: root.contentFontFamily
             font.pixelSize: Style.font.caption
@@ -553,6 +557,21 @@ Panel {
                   }
                 }
 
+                // How long: the whole flight before it leaves, what's left
+                // while it's up, what it took once down. Centered under the
+                // line, where the plane never runs into it.
+                Text {
+                  visible: text !== ""
+                  width: parent.width
+                  topPadding: -Style.spacing.sm
+                  horizontalAlignment: Text.AlignHCenter
+                  textFormat: Text.PlainText
+                  text: Model.durationLabel(card.flight, root.now)
+                  color: card.flight.phase === "airborne" ? card.tone : root.dimColor
+                  font.family: root.contentFontFamily
+                  font.pixelSize: Style.font.caption
+                }
+
                 // Departure on the left, arrival on the right, in each
                 // airport's own time. A changed time shows the timetable one
                 // struck through beside it.
@@ -633,7 +652,8 @@ Panel {
                       text: (card.row.destination.gate ? "Gate " + card.row.destination.gate + " · " : "")
                         + Model.dayLabel(Model.arrivalTime(card.row), card.row.destination, root.now)
                         + " " + card.row.destination.tzAbbr
-                        + (card.flight.phase === "landed" ? " · Landed" : " · Arrives")
+                        + (card.flight.phase === "landed" ? " · Landed"
+                          : (Model.arrivalProjected(card.row) ? " · Projected" : " · Arrives"))
                       color: root.dimColor
                       font.family: root.contentFontFamily
                       font.pixelSize: Style.font.caption
@@ -656,9 +676,143 @@ Panel {
             }
           }
 
+          // ---- Upcoming: flights too far out for the schedule yet.
+          PanelSectionHeader {
+            visible: !root.choosing && root.plans.length > 0
+            text: "Upcoming"
+            foreground: root.contentForeground
+            fontFamily: root.contentFontFamily
+          }
+
+          Repeater {
+            model: root.choosing ? [] : root.plans
+
+            CursorSurface {
+              id: planCard
+              required property var modelData
+              required property int index
+              readonly property var plan: modelData
+              readonly property int cursorIndex: root.flights.length + index
+              readonly property var choices: modelData.choices || []
+
+              width: content.width
+              height: planColumn.implicitHeight + Style.spacing.lg * 2
+              foreground: root.contentForeground
+              accent: root.accentColor
+              hasCursor: root.selectedIndex === planCard.cursorIndex
+
+              MouseArea {
+                id: planMouse
+                anchors.fill: parent
+                hoverEnabled: true
+                onEntered: if (!queryField.activeFocus) root.selectedIndex = planCard.cursorIndex
+              }
+
+              Column {
+                id: planColumn
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.verticalCenter: parent.verticalCenter
+                anchors.leftMargin: Style.spacing.rowPaddingX
+                anchors.rightMargin: Style.spacing.rowPaddingX
+                spacing: Style.spacing.sm
+
+                Item {
+                  width: parent.width
+                  height: Math.max(planNumber.implicitHeight, planRemove.height)
+
+                  Row {
+                    anchors.left: parent.left
+                    anchors.verticalCenter: parent.verticalCenter
+                    spacing: Style.spacing.md
+
+                    Text {
+                      id: planNumber
+                      textFormat: Text.PlainText
+                      text: planCard.plan.number
+                      color: root.contentForeground
+                      font.family: root.contentFontFamily
+                      font.pixelSize: Style.font.body
+                      font.bold: true
+                    }
+
+                    Text {
+                      anchors.baseline: planNumber.baseline
+                      textFormat: Text.PlainText
+                      text: Model.dateText(planCard.plan.date) + " · " + Model.planRouteText(planCard.plan)
+                      color: root.contentForeground
+                      font.family: root.contentFontFamily
+                      font.pixelSize: Style.font.bodySmall
+                    }
+                  }
+
+                  PanelActionButton {
+                    id: planRemove
+                    anchors.right: parent.right
+                    anchors.verticalCenter: parent.verticalCenter
+                    opacity: planMouse.containsMouse || pointerOver || planCard.hasCursor ? 1 : 0
+                    enabled: opacity > 0
+                    property bool pointerOver: false
+                    iconText: root.iconFor("remove")
+                    fontFamily: root.iconFamily
+                    fontSize: Style.font.caption
+                    foreground: root.dimColor
+                    hoverColor: root.urgentColor
+                    tooltipText: "Forget it (x)"
+                    onHovered: function(isHovered) { planRemove.pointerOver = isHovered }
+                    onClicked: if (root.service) root.service.removePlan(planCard.plan.key)
+                  }
+                }
+
+                Text {
+                  width: parent.width
+                  wrapMode: Text.WordWrap
+                  textFormat: Text.PlainText
+                  text: Model.planStatus(planCard.plan, root.now) + (planCard.plan.error ? " · " + planCard.plan.error : "")
+                  color: planCard.plan.error ? root.urgentColor : root.dimColor
+                  font.family: root.contentFontFamily
+                  font.pixelSize: Style.font.caption
+                }
+
+                // Its day turned out to fly more than one route.
+                Repeater {
+                  model: planCard.choices
+
+                  CursorSurface {
+                    id: planChoice
+                    required property var modelData
+                    required property int index
+                    width: planColumn.width
+                    height: planChoiceText.implicitHeight + Style.spacing.sm * 2
+                    foreground: root.contentForeground
+                    accent: root.accentColor
+                    bordered: true
+
+                    MouseArea {
+                      anchors.fill: parent
+                      cursorShape: Qt.PointingHandCursor
+                      onClicked: if (root.service) root.service.choosePlanOption(planCard.plan.key, planChoice.index)
+                    }
+
+                    Text {
+                      id: planChoiceText
+                      anchors.verticalCenter: parent.verticalCenter
+                      x: Style.spacing.md
+                      textFormat: Text.PlainText
+                      text: Model.optionLabel(planChoice.modelData) + " · " + Model.optionDetail(planChoice.modelData, root.now)
+                      color: root.contentForeground
+                      font.family: root.contentFontFamily
+                      font.pixelSize: Style.font.bodySmall
+                    }
+                  }
+                }
+              }
+            }
+          }
+
           // ---- Nothing yet.
           Column {
-            visible: !root.choosing && root.flights.length === 0
+            visible: !root.choosing && root.flights.length === 0 && root.plans.length === 0
             width: parent.width
             spacing: Style.spacing.md
             topPadding: Style.spacing.md

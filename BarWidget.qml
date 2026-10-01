@@ -140,7 +140,8 @@ BarWidget {
     text: root.glyph
     active: root.trouble
     tooltipText: root.service
-      ? Model.tooltip(root.flights, root.service.now, root.service.lastError)
+      ? [Model.tooltip(root.flights, root.service.now, root.service.lastError),
+         Model.plansTooltip(root.service.plans, root.service.now)].filter(function(t) { return t }).join("\n")
       : "Flights · starting…"
 
     onPressed: function(b) {

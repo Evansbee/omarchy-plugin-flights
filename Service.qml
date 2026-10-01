@@ -45,6 +45,8 @@ Item {
 
   // ---- State.
   property var flights: []
+  // Flights too far out for Flightradar24's schedule yet; see Model "Planned".
+  property var plans: []
   property bool notifications: true
   property bool stateLoaded: false
 
@@ -75,12 +77,60 @@ Item {
   // ---- Persistence.
   function save() {
     if (!root.stateLoaded) return
-    stateFile.setText(Model.serializeState({ notifications: root.notifications, flights: root.flights }))
+    stateFile.setText(Model.serializeState({ notifications: root.notifications, flights: root.flights, plans: root.plans }))
   }
 
   function setFlights(list) {
     root.flights = list
     save()
+  }
+
+  function setPlans(list) {
+    root.plans = list
+    save()
+  }
+
+  function findPlan(key) {
+    for (var i = 0; i < root.plans.length; i++) if (root.plans[i].key === key) return i
+    return -1
+  }
+
+  function replacePlan(next) {
+    var index = findPlan(next.key)
+    if (index === -1) return
+    var list = root.plans.slice()
+    list[index] = next
+    setPlans(list)
+  }
+
+  function removePlan(key) {
+    var list = root.plans.filter(function(p) { return p.key !== key })
+    if (list.length !== root.plans.length) {
+      log("remove-plan", key)
+      setPlans(list)
+    }
+  }
+
+  function addPlan(query, rows) {
+    var plan = Model.newPlan(query, rows, Date.now() / 1000)
+    if (findPlan(plan.key) !== -1) {
+      root.lookupNotice = "Already watching for " + plan.number + " on " + Model.dateText(plan.date)
+      return
+    }
+    setPlans(root.plans.concat([plan]))
+    root.lookupNotice = plan.number + " on " + Model.dateText(plan.date)
+      + " is on your upcoming list. Tracking starts when the schedule is published."
+    log("add-plan", plan.key)
+  }
+
+  // A leg picked on a plan's card once its day turned out to fly several.
+  function choosePlanOption(key, index) {
+    var at = findPlan(key)
+    if (at === -1) return
+    var choices = root.plans[at].choices || []
+    if (index < 0 || index >= choices.length) return
+    removePlan(key)
+    addFlight(choices[index])
   }
 
   function setNotifications(on) {
@@ -151,7 +201,8 @@ Item {
     }
 
     var result = Model.resolve(rows, query, Date.now() / 1000)
-    if (result.kind === "none") root.lookupError = result.message
+    if (result.kind === "none" && Model.shouldPlan(query, rows, Date.now() / 1000)) addPlan(query, rows)
+    else if (result.kind === "none") root.lookupError = result.message
     else if (result.kind === "choose") root.lookupOptions = result.options
     else addFlight(result.row)
   }
@@ -198,6 +249,57 @@ Item {
       startRequest(Model.listUrl(f.number))
       return
     }
+
+    for (var j = 0; j < root.plans.length; j++) {
+      var plan = root.plans[j]
+      if (!Model.planDue(plan, nowSec)) continue
+      root.polling = { key: plan.key, number: plan.number, stage: "plan" }
+      startRequest(Model.listUrl(plan.number))
+      return
+    }
+  }
+
+  // A plan's day came back from the schedule: track it, ask which leg, or
+  // keep waiting.
+  function applyPlanResponse(job, response, nowSec) {
+    root.polling = null
+    var at = findPlan(job.key)
+    if (at === -1) return
+    var plan = {}
+    for (var k in root.plans[at]) plan[k] = root.plans[at][k]
+    plan.lastChecked = nowSec
+
+    var rows = response.status === 200 ? Model.parseList(response.body) : null
+    if (rows === null) {
+      plan.error = Model.httpError(response.status)
+      replacePlan(plan)
+      return
+    }
+    plan.error = ""
+
+    var result = Model.resolve(rows, Model.planQuery(plan), nowSec)
+    if (result.kind === "single") {
+      removePlan(plan.key)
+      addFlight(result.row)
+      root.lookupNotice = ""
+      var row = result.row
+      announce([{ title: row.number + " is on the schedule",
+        body: "Now tracking " + row.origin.iata + " → " + row.destination.iata + " · departs "
+          + Model.dayLabel(row.schedDep, row.origin, nowSec) + " " + Model.clock(row.schedDep, row.origin),
+        urgency: "normal" }])
+    } else if (result.kind === "choose") {
+      plan.choices = result.options
+      if (!plan.asked) {
+        plan.asked = true
+        announce([{ title: plan.number + " on " + Model.dateText(plan.date) + " flies " + result.options.length + " routes",
+          body: "Open Flights to pick the one you're on", urgency: "normal" }])
+      }
+      replacePlan(plan)
+    } else {
+      plan.guess = Model.guessRoute(rows, plan.airports) || plan.guess
+      replacePlan(plan)
+    }
+    pollSoon.restart()
   }
 
   function refreshAll() {
@@ -222,10 +324,11 @@ Item {
     var job = root.polling
     if (!job) return
     var index = findIndex(job.key)
-    if (index === -1) { root.polling = null; return }
-    var tracked = root.flights[index]
+    if (index === -1 && job.stage !== "plan") { root.polling = null; return }
     var nowSec = Date.now() / 1000
     var response = Model.splitResponse(raw)
+    if (job.stage === "plan") { applyPlanResponse(job, response, nowSec); return }
+    var tracked = root.flights[index]
 
     if (response.status !== 200) {
       root.polling = null
@@ -279,6 +382,13 @@ Item {
       else keep.push(f)
     }
     if (keep.length !== root.flights.length) setFlights(keep)
+
+    var keepPlans = root.plans.filter(function(p) {
+      var gone = Model.planExpired(p, nowSec)
+      if (gone) root.log("expire-plan", p.key)
+      return !gone
+    })
+    if (keepPlans.length !== root.plans.length) setPlans(keepPlans)
   }
 
   // ---- Notifications. Several changes from one poll become one bubble.
@@ -362,6 +472,7 @@ Item {
       var state = Model.parseState(text())
       root.notifications = state.notifications
       root.flights = state.flights
+      root.plans = state.plans
       root.stateLoaded = true
       root.log("loaded", state.flights.length + " flight(s)")
     }
@@ -382,6 +493,10 @@ Item {
         fetching: root.fetching,
         lastError: root.lastError,
         backoffUntil: root.backoffUntil,
+        plans: root.plans.map(function(p) {
+          return { key: p.key, route: Model.planRouteText(p), status: Model.planStatus(p, Date.now() / 1000),
+                   choices: (p.choices || []).length, error: p.error || "" }
+        }),
         flights: root.sortedFlights.map(function(f) {
           return {
             key: f.key, phase: f.phase, status: Model.statusLine(f, Date.now() / 1000),
@@ -397,8 +512,16 @@ Item {
     function track(query: string): string {
       return root.lookup(query) ? "looking up " + query : root.lookupError
     }
-    function remove(key: string): void { root.removeFlight(key) }
-    function refresh(): void { root.refreshAll() }
+    function remove(key: string): void { root.removeFlight(key); root.removePlan(key) }
+    function refresh(): void {
+      root.plans = root.plans.map(function(p) {
+        var c = {}
+        for (var k in p) c[k] = p[k]
+        c.lastChecked = 0
+        return c
+      })
+      root.refreshAll()
+    }
     function notify(on: bool): void { root.setNotifications(on) }
     function testNotification(): void {
       Quickshell.execDetached(["notify-send", "--app-name=Flights", "--icon=" + root.notifyIcon,
