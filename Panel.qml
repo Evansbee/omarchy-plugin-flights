@@ -1,0 +1,706 @@
+import QtQuick
+import qs.Commons
+import qs.Ui
+import "Model.js" as Model
+
+// The flights popup: a box to type a flight number into, the question that
+// comes back when a number flies more than one route, the notification
+// switch, and one card per tracked flight.
+//
+// The box has focus the moment the panel opens, so the whole interaction can
+// be "click the plane, type UA1, Enter". Down arrow leaves the box for the
+// list below; Up from the top of the list goes back.
+//
+// BarWidget.qml finds the service and hands this panel the button to anchor
+// to; everything rendered here is read straight off the service.
+Panel {
+  id: root
+  moduleName: "evansbee.flights"
+
+  property var anchorItem: null
+
+  // The bar tracks the widget mounted in its slot — BarWidget.qml — not this
+  // nested panel, so everything the bar identifies a panel by has to be that
+  // widget.
+  property var hostWidget: null
+  readonly property var barIdentity: hostWidget || root
+
+  readonly property var service: hostWidget ? hostWidget.service : null
+  readonly property var flights: service ? service.sortedFlights : []
+  readonly property var options: service ? service.lookupOptions : []
+  readonly property bool choosing: options.length > 0
+  readonly property real now: service ? service.now : Date.now() / 1000
+
+  readonly property color contentForeground: bar ? bar.foreground : Color.foreground
+  readonly property color urgentColor: bar ? bar.urgent : Color.urgent
+  readonly property color accentColor: Color.accent
+  readonly property string contentFontFamily: bar ? bar.fontFamily : Style.font.family
+  readonly property color dimColor: Qt.darker(contentForeground, 1.45)
+  readonly property color faintColor: Qt.darker(contentForeground, 1.7)
+
+  readonly property string iconTier: hostWidget ? hostWidget.iconTier : "nerd"
+  readonly property string iconFamily: hostWidget ? hostWidget.iconFamily : contentFontFamily
+  readonly property int iconWeight: hostWidget ? hostWidget.iconWeight : Font.Normal
+  function iconFor(name) { return Model.icon(name, root.iconTier) }
+
+  // ---- Cursor over whichever list is showing: the legs being chosen
+  //      between, or the tracked flights.
+  readonly property int rowCount: choosing ? options.length : flights.length
+  property int selectedIndex: -1
+
+  function focusField() {
+    root.selectedIndex = -1
+    queryField.forceActiveFocus()
+  }
+
+  function focusList() {
+    if (root.rowCount === 0) return
+    root.selectedIndex = 0
+    keyCatcher.forceActiveFocus()
+  }
+
+  function moveCursor(delta) {
+    if (root.rowCount === 0) return
+    var next = root.selectedIndex + delta
+    if (next < 0) { focusField(); return }
+    root.selectedIndex = Math.min(next, root.rowCount - 1)
+  }
+
+  function activateCursor() {
+    if (root.choosing) choose(root.selectedIndex)
+  }
+
+  function deleteCursor() {
+    if (root.choosing || root.selectedIndex < 0 || root.selectedIndex >= root.flights.length) return
+    removeFlight(root.flights[root.selectedIndex].key)
+    if (root.selectedIndex >= root.flights.length - 1) root.selectedIndex = root.flights.length - 2
+    if (root.selectedIndex < 0) focusField()
+  }
+
+  function submit() {
+    if (!root.service) return
+    if (root.service.lookup(queryField.text)) queryField.selectAll()
+  }
+
+  function choose(index) {
+    if (!root.service) return
+    root.service.chooseOption(index)
+    queryField.text = ""
+    focusField()
+  }
+
+  function removeFlight(key) {
+    if (root.service) root.service.removeFlight(key)
+  }
+
+  function dismiss() {
+    if (root.choosing && root.service) { root.service.cancelLookup(); focusField(); return }
+    root.close()
+  }
+
+  // Delays and trouble in the urgent color; motion in the accent.
+  function phaseColor(flight) {
+    if (Model.isTroublePhase(flight.phase)) return root.urgentColor
+    if (Model.isActivePhase(flight.phase)) return root.accentColor
+    if (flight.phase !== "landed" && Model.delayMinutes(flight.row) >= 15) return root.urgentColor
+    return root.dimColor
+  }
+
+  onOpenedChanged: {
+    // A question left open when the panel closes would be waiting, stale,
+    // the next time the plane is clicked.
+    if (!opened) {
+      if (root.choosing && root.service) root.service.cancelLookup()
+      return
+    }
+    if (root.service) {
+      root.service.lookupNotice = ""
+      if (!root.choosing) root.service.lookupError = ""
+    }
+    Qt.callLater(root.focusField)
+  }
+
+  KeyboardPanel {
+    id: panel
+    anchorItem: root.anchorItem
+    owner: root.barIdentity
+    bar: root.bar
+    open: root.opened
+    focusTarget: queryField
+    contentWidth: panel.fittedContentWidth(Style.space(440))
+    contentHeight: panel.fittedContentHeight(content.implicitHeight)
+
+    PanelKeyCatcher {
+      id: keyCatcher
+      anchors.fill: parent
+      blocked: queryField.activeFocus
+      onMoveRequested: function(dx, dy) { if (dy !== 0) root.moveCursor(dy) }
+      onActivateRequested: root.activateCursor()
+      onDeleteRequested: root.deleteCursor()
+      onCloseRequested: root.dismiss()
+      onTabRequested: function(direction) { root.switchPanel(direction) }
+      onTextKey: function(t) {
+        if (t === "/" || t === "a" || t === "i") root.focusField()
+        else if (t === "r" && root.service) root.service.refreshAll()
+      }
+
+      Flickable {
+        id: scroll
+        anchors.fill: parent
+        contentWidth: width
+        contentHeight: content.implicitHeight
+        clip: true
+        boundsBehavior: Flickable.StopAtBounds
+        interactive: contentHeight > height
+
+        Column {
+          id: content
+          width: scroll.width
+          spacing: Style.spacing.lg
+
+          // ---- Header: the title and the notification switch.
+          Item {
+            width: parent.width
+            height: Math.max(titleRow.implicitHeight, notifySwitch.height)
+
+            Row {
+              id: titleRow
+              anchors.left: parent.left
+              anchors.verticalCenter: parent.verticalCenter
+              spacing: Style.spacing.md
+
+              Text {
+                anchors.verticalCenter: parent.verticalCenter
+                textFormat: Text.PlainText
+                text: root.iconFor("flying")
+                rotation: Model.flyingRotation(root.iconTier)
+                color: root.accentColor
+                font.family: root.iconFamily
+                font.weight: root.iconWeight
+                font.pixelSize: Style.font.title
+              }
+
+              Text {
+                anchors.verticalCenter: parent.verticalCenter
+                textFormat: Text.PlainText
+                text: "Flights"
+                color: root.contentForeground
+                font.family: root.contentFontFamily
+                font.pixelSize: Style.font.title
+                font.bold: true
+              }
+            }
+
+            Row {
+              anchors.right: parent.right
+              anchors.verticalCenter: parent.verticalCenter
+              spacing: Style.spacing.sm
+
+              Text {
+                anchors.verticalCenter: parent.verticalCenter
+                textFormat: Text.PlainText
+                text: root.iconFor(root.service && root.service.notifications ? "bell" : "bellOff")
+                color: root.service && root.service.notifications ? root.contentForeground : root.faintColor
+                font.family: root.iconFamily
+                font.weight: root.iconWeight
+                font.pixelSize: Style.font.bodySmall
+              }
+
+              Text {
+                anchors.verticalCenter: parent.verticalCenter
+                textFormat: Text.PlainText
+                text: "Notify on changes"
+                color: root.dimColor
+                font.family: root.contentFontFamily
+                font.pixelSize: Style.font.bodySmall
+              }
+
+              ToggleSwitch {
+                id: notifySwitch
+                anchors.verticalCenter: parent.verticalCenter
+                foreground: root.contentForeground
+                accent: root.accentColor
+                checked: root.service ? root.service.notifications : false
+                onToggled: if (root.service) root.service.setNotifications(!root.service.notifications)
+              }
+            }
+          }
+
+          // ---- The box.
+          Item {
+            width: parent.width
+            height: queryField.implicitHeight
+
+            TextField {
+              id: queryField
+              anchors.left: parent.left
+              anchors.right: goButton.left
+              anchors.rightMargin: Style.spacing.md
+              placeholderText: "Flight number — UA1, WN302 AUS, DL1 10/3"
+              foreground: root.contentForeground
+              accent: root.accentColor
+              font.family: root.contentFontFamily
+
+              Keys.onPressed: function(event) {
+                if (event.key === Qt.Key_Escape) {
+                  root.dismiss()
+                  event.accepted = true
+                } else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
+                  root.submit()
+                  event.accepted = true
+                } else if (event.key === Qt.Key_Down) {
+                  root.focusList()
+                  event.accepted = true
+                } else if (event.key === Qt.Key_Tab || event.key === Qt.Key_Backtab) {
+                  root.switchPanel(event.key === Qt.Key_Backtab ? -1 : 1)
+                  event.accepted = true
+                }
+              }
+            }
+
+            PanelActionButton {
+              id: goButton
+              anchors.right: parent.right
+              anchors.verticalCenter: parent.verticalCenter
+              size: queryField.implicitHeight
+              bordered: true
+              iconText: root.service && root.service.lookupBusy ? root.iconFor("radar") : root.iconFor("search")
+              fontFamily: root.iconFamily
+              fontSize: Style.font.body
+              foreground: root.contentForeground
+              hoverColor: root.accentColor
+              tooltipText: "Look up"
+              onClicked: root.submit()
+
+              // The radar sweeps while a lookup is out.
+              RotationAnimator on rotation {
+                running: root.service ? root.service.lookupBusy : false
+                from: 0; to: 360; duration: 1100
+                loops: Animation.Infinite
+                onRunningChanged: if (!running) goButton.rotation = 0
+              }
+            }
+          }
+
+          // Whatever the last lookup has to say, else how to phrase one.
+          Text {
+            width: parent.width
+            textFormat: Text.PlainText
+            wrapMode: Text.WordWrap
+            readonly property string error: root.service ? root.service.lookupError : ""
+            readonly property string notice: root.service ? root.service.lookupNotice : ""
+            text: error !== "" ? error
+              : (notice !== "" ? notice
+              : (root.service && root.service.lookupBusy ? "Looking it up…"
+              : "Enter tracks the next departure, or the one in the air now. Add an airport or a date to pick a different one."))
+            color: error !== "" ? root.urgentColor : (notice !== "" ? root.accentColor : root.faintColor)
+            font.family: root.contentFontFamily
+            font.pixelSize: Style.font.caption
+          }
+
+          // ---- Which one? Only while a lookup came back with several legs.
+          Column {
+            visible: root.choosing
+            width: parent.width
+            spacing: Style.spacing.sm
+
+            PanelSectionHeader {
+              text: (root.options.length > 0 ? root.options[0].number : "") + " flies more than one route — which one?"
+              foreground: root.contentForeground
+              fontFamily: root.contentFontFamily
+            }
+
+            Repeater {
+              model: root.choosing ? root.options : []
+
+              CursorSurface {
+                id: option
+                required property var modelData
+                required property int index
+
+                width: content.width
+                height: optionColumn.implicitHeight + Style.spacing.md * 2
+                foreground: root.contentForeground
+                accent: root.accentColor
+                hasCursor: root.selectedIndex === option.index
+
+                MouseArea {
+                  anchors.fill: parent
+                  hoverEnabled: true
+                  cursorShape: Qt.PointingHandCursor
+                  onEntered: root.selectedIndex = option.index
+                  onClicked: root.choose(option.index)
+                }
+
+                Column {
+                  id: optionColumn
+                  anchors.left: parent.left
+                  anchors.right: parent.right
+                  anchors.verticalCenter: parent.verticalCenter
+                  anchors.leftMargin: Style.spacing.rowPaddingX
+                  anchors.rightMargin: Style.spacing.rowPaddingX
+                  spacing: Style.spacing.xs
+
+                  Text {
+                    textFormat: Text.PlainText
+                    text: Model.optionLabel(option.modelData)
+                      + "   " + option.modelData.origin.city + " to " + option.modelData.destination.city
+                    color: root.contentForeground
+                    font.family: root.contentFontFamily
+                    font.pixelSize: Style.font.body
+                    font.bold: true
+                    elide: Text.ElideRight
+                    width: parent.width
+                  }
+
+                  Text {
+                    textFormat: Text.PlainText
+                    text: Model.optionDetail(option.modelData, root.now)
+                    color: root.dimColor
+                    font.family: root.contentFontFamily
+                    font.pixelSize: Style.font.bodySmall
+                  }
+                }
+              }
+            }
+          }
+
+          PanelSeparator { foreground: root.contentForeground }
+
+          // ---- The flights.
+          Repeater {
+            model: root.choosing ? [] : root.flights
+
+            CursorSurface {
+              id: card
+              required property var modelData
+              required property int index
+
+              readonly property var flight: modelData
+              readonly property var row: modelData.row
+              readonly property color tone: root.phaseColor(modelData)
+              readonly property int lateDep: Model.delayMinutes(row)
+              readonly property int lateArr: Model.arrivalDelayMinutes(row)
+
+              width: content.width
+              height: cardColumn.implicitHeight + Style.spacing.lg * 2
+              foreground: root.contentForeground
+              accent: root.accentColor
+              hasCursor: root.selectedIndex === card.index
+
+              MouseArea {
+                id: cardMouse
+                anchors.fill: parent
+                hoverEnabled: true
+                onEntered: if (!queryField.activeFocus) root.selectedIndex = card.index
+              }
+
+              Column {
+                id: cardColumn
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.verticalCenter: parent.verticalCenter
+                anchors.leftMargin: Style.spacing.rowPaddingX
+                anchors.rightMargin: Style.spacing.rowPaddingX
+                spacing: Style.spacing.md
+
+                // Number, airline, and the phase on the right.
+                Item {
+                  width: parent.width
+                  height: Math.max(numberText.implicitHeight, removeButton.height)
+
+                  Row {
+                    anchors.left: parent.left
+                    anchors.verticalCenter: parent.verticalCenter
+                    spacing: Style.spacing.md
+
+                    Text {
+                      id: numberText
+                      textFormat: Text.PlainText
+                      text: card.row.number
+                      color: root.contentForeground
+                      font.family: root.contentFontFamily
+                      font.pixelSize: Style.font.body
+                      font.bold: true
+                    }
+
+                    Text {
+                      anchors.baseline: numberText.baseline
+                      textFormat: Text.PlainText
+                      text: [card.row.airline, card.row.aircraft].filter(function(s) { return s }).join(" · ")
+                      color: root.faintColor
+                      font.family: root.contentFontFamily
+                      font.pixelSize: Style.font.caption
+                    }
+                  }
+
+                  Row {
+                    anchors.right: parent.right
+                    anchors.verticalCenter: parent.verticalCenter
+                    spacing: Style.spacing.md
+
+                    Text {
+                      anchors.verticalCenter: parent.verticalCenter
+                      textFormat: Text.PlainText
+                      text: Model.phaseLabel(card.flight.phase)
+                      color: card.tone
+                      font.family: root.contentFontFamily
+                      font.pixelSize: Style.font.bodySmall
+                      font.bold: true
+                    }
+
+                    PanelActionButton {
+                      id: removeButton
+                      anchors.verticalCenter: parent.verticalCenter
+                      // Only under the pointer or cursor, so the list reads
+                      // as information rather than a column of x's.
+                      opacity: cardMouse.containsMouse || pointerOver || card.hasCursor ? 1 : 0
+                      enabled: opacity > 0
+                      property bool pointerOver: false
+                      iconText: root.iconFor("remove")
+                      fontFamily: root.iconFamily
+                      fontSize: Style.font.caption
+                      foreground: root.dimColor
+                      hoverColor: root.urgentColor
+                      tooltipText: "Stop tracking (x)"
+                      onHovered: function(isHovered) { removeButton.pointerOver = isHovered }
+                      onClicked: root.removeFlight(card.flight.key)
+                    }
+                  }
+                }
+
+                // The route, with the plane where the flight is.
+                Item {
+                  width: parent.width
+                  height: Math.max(originCode.implicitHeight, planeMark.implicitHeight)
+
+                  Text {
+                    id: originCode
+                    anchors.left: parent.left
+                    anchors.verticalCenter: parent.verticalCenter
+                    textFormat: Text.PlainText
+                    text: card.row.origin.iata
+                    color: root.contentForeground
+                    font.family: root.contentFontFamily
+                    font.pixelSize: Style.font.title
+                    font.bold: true
+                  }
+
+                  Text {
+                    id: destCode
+                    anchors.right: parent.right
+                    anchors.verticalCenter: parent.verticalCenter
+                    textFormat: Text.PlainText
+                    text: card.row.destination.iata
+                    color: root.contentForeground
+                    font.family: root.contentFontFamily
+                    font.pixelSize: Style.font.title
+                    font.bold: true
+                  }
+
+                  Item {
+                    id: track
+                    anchors.left: originCode.right
+                    anchors.right: destCode.left
+                    anchors.leftMargin: Style.spacing.lg
+                    anchors.rightMargin: Style.spacing.lg
+                    anchors.verticalCenter: parent.verticalCenter
+                    height: planeMark.implicitHeight
+
+                    readonly property real fraction: Model.progress(card.flight, root.now)
+
+                    // Dotted ahead, solid behind: the part already flown.
+                    Row {
+                      anchors.verticalCenter: parent.verticalCenter
+                      width: parent.width
+                      spacing: Style.space(4)
+                      clip: true
+                      Repeater {
+                        model: Math.max(0, Math.floor(track.width / Style.space(8)))
+                        Rectangle {
+                          width: Style.space(4)
+                          height: Math.max(1, Style.space(2))
+                          radius: height / 2
+                          color: root.faintColor
+                          anchors.verticalCenter: parent.verticalCenter
+                        }
+                      }
+                    }
+
+                    Rectangle {
+                      anchors.verticalCenter: parent.verticalCenter
+                      width: track.width * track.fraction
+                      height: Math.max(1, Style.space(2))
+                      radius: height / 2
+                      color: card.tone
+                      Behavior on width { NumberAnimation { duration: 600; easing.type: Easing.OutCubic } }
+                    }
+
+                    Text {
+                      id: planeMark
+                      textFormat: Text.PlainText
+                      anchors.verticalCenter: parent.verticalCenter
+                      x: Math.max(0, Math.min(track.width - width, track.width * track.fraction - width / 2))
+                      text: root.iconFor(Model.isTroublePhase(card.flight.phase) ? (card.flight.phase === "canceled" ? "canceled" : "alert") : "flying")
+                      rotation: Model.isTroublePhase(card.flight.phase) ? 0 : Model.flyingRotation(root.iconTier)
+                      color: Model.isActivePhase(card.flight.phase) || Model.isTroublePhase(card.flight.phase) ? card.tone : root.contentForeground
+                      font.family: root.iconFamily
+                      font.weight: root.iconWeight
+                      font.pixelSize: Style.font.body
+
+                      Behavior on x { NumberAnimation { duration: 600; easing.type: Easing.OutCubic } }
+                    }
+                  }
+                }
+
+                // Departure on the left, arrival on the right, in each
+                // airport's own time. A changed time shows the timetable one
+                // struck through beside it.
+                Item {
+                  width: parent.width
+                  height: Math.max(depColumn.implicitHeight, arrColumn.implicitHeight)
+
+                  Column {
+                    id: depColumn
+                    anchors.left: parent.left
+                    spacing: Style.spacing.xs
+
+                    Row {
+                      spacing: Style.spacing.sm
+                      Text {
+                        textFormat: Text.PlainText
+                        text: Model.clock(Model.departureTime(card.row), card.row.origin)
+                        color: card.lateDep >= 15 && !card.row.realDep ? root.urgentColor : root.contentForeground
+                        font.family: root.contentFontFamily
+                        font.pixelSize: Style.font.body
+                        font.bold: true
+                      }
+                      Text {
+                        visible: Math.abs(card.lateDep) >= 5
+                        textFormat: Text.PlainText
+                        text: Model.clock(card.row.schedDep, card.row.origin)
+                        font.strikeout: true
+                        color: root.faintColor
+                        font.family: root.contentFontFamily
+                        font.pixelSize: Style.font.bodySmall
+                        anchors.bottom: parent.bottom
+                      }
+                    }
+
+                    Text {
+                      textFormat: Text.PlainText
+                      text: (card.row.realDep ? "Departed · " : "Departs · ")
+                        + Model.dayLabel(Model.departureTime(card.row), card.row.origin, root.now)
+                        + " " + card.row.origin.tzAbbr
+                        + (card.row.origin.gate ? " · Gate " + card.row.origin.gate : "")
+                      color: root.dimColor
+                      font.family: root.contentFontFamily
+                      font.pixelSize: Style.font.caption
+                    }
+                  }
+
+                  Column {
+                    id: arrColumn
+                    anchors.right: parent.right
+                    spacing: Style.spacing.xs
+
+                    Row {
+                      anchors.right: parent.right
+                      spacing: Style.spacing.sm
+                      Text {
+                        visible: Math.abs(card.lateArr) >= 5
+                        textFormat: Text.PlainText
+                        text: Model.clock(card.row.schedArr, card.row.destination)
+                        font.strikeout: true
+                        color: root.faintColor
+                        font.family: root.contentFontFamily
+                        font.pixelSize: Style.font.bodySmall
+                        anchors.bottom: parent.bottom
+                      }
+                      Text {
+                        textFormat: Text.PlainText
+                        text: Model.clock(Model.arrivalTime(card.row), card.row.destination)
+                        color: card.lateArr >= 15 && card.flight.phase !== "landed" ? root.urgentColor : root.contentForeground
+                        font.family: root.contentFontFamily
+                        font.pixelSize: Style.font.body
+                        font.bold: true
+                      }
+                    }
+
+                    Text {
+                      anchors.right: parent.right
+                      textFormat: Text.PlainText
+                      text: (card.row.destination.gate ? "Gate " + card.row.destination.gate + " · " : "")
+                        + Model.dayLabel(Model.arrivalTime(card.row), card.row.destination, root.now)
+                        + " " + card.row.destination.tzAbbr
+                        + (card.flight.phase === "landed" ? " · Landed" : " · Arrives")
+                      color: root.dimColor
+                      font.family: root.contentFontFamily
+                      font.pixelSize: Style.font.caption
+                    }
+                  }
+                }
+
+                // The sentence version, plus anything that went wrong.
+                Text {
+                  width: parent.width
+                  textFormat: Text.PlainText
+                  elide: Text.ElideRight
+                  text: Model.statusLine(card.flight, root.now)
+                    + (card.flight.error ? " · " + card.flight.error : "")
+                  color: card.flight.error ? root.urgentColor : card.tone
+                  font.family: root.contentFontFamily
+                  font.pixelSize: Style.font.bodySmall
+                }
+              }
+            }
+          }
+
+          // ---- Nothing yet.
+          Column {
+            visible: !root.choosing && root.flights.length === 0
+            width: parent.width
+            spacing: Style.spacing.md
+            topPadding: Style.spacing.md
+            bottomPadding: Style.spacing.md
+
+            Text {
+              anchors.horizontalCenter: parent.horizontalCenter
+              textFormat: Text.PlainText
+              text: root.iconFor("tower")
+              color: root.faintColor
+              font.family: root.iconFamily
+              font.weight: root.iconWeight
+              font.pixelSize: Style.space(32)
+            }
+
+            Text {
+              anchors.horizontalCenter: parent.horizontalCenter
+              textFormat: Text.PlainText
+              text: root.service ? "No flights on the board" : "Waiting for the flight service…"
+              color: root.dimColor
+              font.family: root.contentFontFamily
+              font.pixelSize: Style.font.bodySmall
+            }
+          }
+
+          PanelSeparator { foreground: root.contentForeground }
+
+          Text {
+            width: parent.width
+            textFormat: Text.PlainText
+            horizontalAlignment: Text.AlignHCenter
+            wrapMode: Text.WordWrap
+            text: root.service && root.service.lastError !== ""
+              ? root.service.lastError
+              : "↓ to the list · x stops tracking · r refreshes · landed flights leave after "
+                + (root.service ? root.service.dropAfterHours : 3) + "h"
+            color: root.service && root.service.lastError !== "" ? root.urgentColor : root.faintColor
+            font.family: root.contentFontFamily
+            font.pixelSize: Style.font.caption
+          }
+        }
+      }
+    }
+  }
+}

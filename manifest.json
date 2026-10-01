@@ -1,0 +1,53 @@
+{
+  "schemaVersion": 1,
+  "id": "evansbee.flights",
+  "name": "Flights",
+  "version": "1.0.0",
+  "author": "evansbee",
+  "license": "MIT",
+  "homepage": "https://github.com/evansbee/omarchy-plugin-flights",
+  "description": "Track flights from the bar: live status, delays, gates, and notifications when anything changes",
+  "kinds": [
+    "service",
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "service": "Service.qml",
+    "barWidget": "BarWidget.qml"
+  },
+  "barWidget": {
+    "displayName": "Flights",
+    "description": "Track flights from the bar: live status, delays, gates, and notifications when anything changes",
+    "category": "Info",
+    "allowMultiple": false,
+    "defaultSection": "right",
+    "defaults": {
+      "dropAfterHours": 3,
+      "changeMinutes": 10,
+      "animate": true,
+      "iconFont": "~/Resources/fontawesome_font/otfs/Font Awesome 7 Pro-Solid-900.otf"
+    },
+    "schema": [
+      {
+        "key": "dropAfterHours",
+        "type": "int",
+        "label": "Hours a landed flight stays on the list"
+      },
+      {
+        "key": "changeMinutes",
+        "type": "int",
+        "label": "Minutes a time must move before it is announced"
+      },
+      {
+        "key": "animate",
+        "type": "boolean",
+        "label": "Animate the bar icon while tracking"
+      },
+      {
+        "key": "iconFont",
+        "type": "string",
+        "label": "Font Awesome Pro font file (blank for the free icons)"
+      }
+    ]
+  }
+}
