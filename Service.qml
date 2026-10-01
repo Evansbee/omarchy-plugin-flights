@@ -68,6 +68,9 @@ Item {
   property string lookupNotice: ""
   property var lookupOptions: []
   property var pendingQuery: null
+  // The name typed with a lookup that came back as a question, for the leg
+  // the person then picks.
+  property string pendingTitle: ""
 
   function log(event, detail) {
     console.log("flights " + new Date().toISOString() + " " + event
@@ -118,7 +121,7 @@ Item {
       return
     }
     setPlans(root.plans.concat([plan]))
-    root.lookupNotice = plan.number + " on " + Model.dateText(plan.date)
+    root.lookupNotice = (plan.title || plan.number) + " on " + Model.dateText(plan.date)
       + " is on your upcoming list. Tracking starts when the schedule is published."
     log("add-plan", plan.key)
   }
@@ -129,8 +132,31 @@ Item {
     if (at === -1) return
     var choices = root.plans[at].choices || []
     if (index < 0 || index >= choices.length) return
+    var title = root.plans[at].title
     removePlan(key)
-    addFlight(choices[index])
+    addFlight(choices[index], title)
+  }
+
+  // Name (or un-name, with "") a tracked or upcoming flight.
+  function renameFlight(key, title) {
+    var name = Model.cleanTitle(title)
+    var at = findIndex(key)
+    if (at !== -1) {
+      var f = {}
+      for (var k in root.flights[at]) f[k] = root.flights[at][k]
+      f.title = name
+      replaceFlight(f)
+      log("rename", key + " → " + name)
+      return
+    }
+    var p = findPlan(key)
+    if (p !== -1) {
+      var plan = {}
+      for (var j in root.plans[p]) plan[j] = root.plans[p][j]
+      plan.title = name
+      replacePlan(plan)
+      log("rename", key + " → " + name)
+    }
   }
 
   function setNotifications(on) {
@@ -203,20 +229,21 @@ Item {
     var result = Model.resolve(rows, query, Date.now() / 1000)
     if (result.kind === "none" && Model.shouldPlan(query, rows, Date.now() / 1000)) addPlan(query, rows)
     else if (result.kind === "none") root.lookupError = result.message
-    else if (result.kind === "choose") root.lookupOptions = result.options
-    else addFlight(result.row)
+    else if (result.kind === "choose") { root.pendingTitle = query.title || ""; root.lookupOptions = result.options }
+    else addFlight(result.row, query.title)
   }
 
   function chooseOption(index) {
     var options = root.lookupOptions
     if (index < 0 || index >= options.length) return
     root.lookupOptions = []
-    addFlight(options[index])
+    addFlight(options[index], root.pendingTitle)
+    root.pendingTitle = ""
   }
 
-  function addFlight(row) {
+  function addFlight(row, title) {
     var nowSec = Date.now() / 1000
-    var tracked = Model.newTracked(row, nowSec)
+    var tracked = Model.newTracked(row, nowSec, title)
     if (findIndex(tracked.key) !== -1) {
       root.lookupNotice = "Already tracking " + row.number + " " + row.origin.iata + "→" + row.destination.iata
       return
@@ -224,7 +251,7 @@ Item {
     var list = root.flights.slice()
     list.push(tracked)
     setFlights(list)
-    root.lookupNotice = "Tracking " + row.number + " " + row.origin.iata + "→" + row.destination.iata
+    root.lookupNotice = "Tracking " + Model.displayName(tracked) + " " + row.origin.iata + "→" + row.destination.iata
     log("add", tracked.key)
     // Due immediately, so a live flight gets its position and gates now
     // instead of at the next tick.
@@ -280,10 +307,10 @@ Item {
     var result = Model.resolve(rows, Model.planQuery(plan), nowSec)
     if (result.kind === "single") {
       removePlan(plan.key)
-      addFlight(result.row)
+      addFlight(result.row, plan.title)
       root.lookupNotice = ""
       var row = result.row
-      announce([{ title: row.number + " is on the schedule",
+      announce([{ title: (plan.title || row.number) + " is on the schedule",
         body: "Now tracking " + row.origin.iata + " → " + row.destination.iata + " · departs "
           + Model.dayLabel(row.schedDep, row.origin, nowSec) + " " + Model.clock(row.schedDep, row.origin),
         urgency: "normal" }])
@@ -291,7 +318,7 @@ Item {
       plan.choices = result.options
       if (!plan.asked) {
         plan.asked = true
-        announce([{ title: plan.number + " on " + Model.dateText(plan.date) + " flies " + result.options.length + " routes",
+        announce([{ title: (plan.title || plan.number) + " on " + Model.dateText(plan.date) + " flies " + result.options.length + " routes",
           body: "Open Flights to pick the one you're on", urgency: "normal" }])
       }
       replacePlan(plan)
@@ -499,7 +526,7 @@ Item {
         }),
         flights: root.sortedFlights.map(function(f) {
           return {
-            key: f.key, phase: f.phase, status: Model.statusLine(f, Date.now() / 1000),
+            key: f.key, title: f.title || "", phase: f.phase, status: Model.statusLine(f, Date.now() / 1000),
             departs: new Date(Model.departureTime(f.row) * 1000).toISOString(),
             arrives: new Date(Model.arrivalTime(f.row) * 1000).toISOString(),
             lastPolled: f.lastPolled ? new Date(f.lastPolled * 1000).toISOString() : "",
@@ -513,6 +540,7 @@ Item {
       return root.lookup(query) ? "looking up " + query : root.lookupError
     }
     function remove(key: string): void { root.removeFlight(key); root.removePlan(key) }
+    function rename(key: string, title: string): void { root.renameFlight(key, title) }
     function refresh(): void {
       root.plans = root.plans.map(function(p) {
         var c = {}

@@ -81,6 +81,31 @@ Panel {
     if (root.selectedIndex < 0) focusField()
   }
 
+  // ---- Naming a flight in place: click its name, or `e` on the cursor row.
+  property string editingKey: ""
+
+  function startRename(key) {
+    root.editingKey = key
+  }
+
+  function commitRename(key, text) {
+    if (root.editingKey !== key) return
+    root.editingKey = ""
+    if (root.service) root.service.renameFlight(key, text)
+    keyCatcher.forceActiveFocus()
+  }
+
+  function cancelRename() {
+    root.editingKey = ""
+    keyCatcher.forceActiveFocus()
+  }
+
+  function renameCursor() {
+    var i = root.selectedIndex
+    if (root.choosing || i < 0 || i >= root.rowCount) return
+    startRename(i < root.flights.length ? root.flights[i].key : root.plans[i - root.flights.length].key)
+  }
+
   function submit() {
     if (!root.service) return
     if (root.service.lookup(queryField.text)) queryField.selectAll()
@@ -114,6 +139,7 @@ Panel {
     // A question left open when the panel closes would be waiting, stale,
     // the next time the plane is clicked.
     if (!opened) {
+      root.editingKey = ""
       if (root.choosing && root.service) root.service.cancelLookup()
       return
     }
@@ -137,7 +163,7 @@ Panel {
     PanelKeyCatcher {
       id: keyCatcher
       anchors.fill: parent
-      blocked: queryField.activeFocus
+      blocked: queryField.activeFocus || root.editingKey !== ""
       onMoveRequested: function(dx, dy) { if (dy !== 0) root.moveCursor(dy) }
       onActivateRequested: root.activateCursor()
       onDeleteRequested: root.deleteCursor()
@@ -146,6 +172,7 @@ Panel {
       onTextKey: function(t) {
         if (t === "/" || t === "a" || t === "i") root.focusField()
         else if (t === "r" && root.service) root.service.refreshAll()
+        else if (t === "e") root.renameCursor()
       }
 
       Flickable {
@@ -249,7 +276,7 @@ Panel {
               anchors.left: parent.left
               anchors.right: goButton.left
               anchors.rightMargin: Style.spacing.md
-              placeholderText: "Flight number — UA1, WN302 AUS, DL1 Dec 15"
+              placeholderText: "UA1 · WN302 AUS · DL1 Dec 15 \"Mom's flight home\""
               foreground: root.contentForeground
               accent: root.accentColor
               font.family: root.contentFontFamily
@@ -417,37 +444,79 @@ Panel {
                 anchors.rightMargin: Style.spacing.rowPaddingX
                 spacing: Style.spacing.md
 
-                // Number, airline, and the phase on the right.
+                // Name (or number), the details, and the phase on the right.
+                // Clicking the name renames it in place.
                 Item {
+                  id: cardHeader
                   width: parent.width
-                  height: Math.max(numberText.implicitHeight, removeButton.height)
+                  height: Math.max(numberText.implicitHeight, removeButton.height,
+                                   cardTitleField.visible ? cardTitleField.implicitHeight : 0)
+                  readonly property real leftWidth: width - phaseRow.width - Style.spacing.lg
 
                   Row {
                     anchors.left: parent.left
                     anchors.verticalCenter: parent.verticalCenter
                     spacing: Style.spacing.md
+                    visible: !cardTitleField.visible
 
                     Text {
                       id: numberText
+                      width: Math.min(implicitWidth, cardHeader.leftWidth)
+                      elide: Text.ElideRight
                       textFormat: Text.PlainText
-                      text: card.row.number
+                      text: card.flight.title || card.row.number
                       color: root.contentForeground
                       font.family: root.contentFontFamily
                       font.pixelSize: Style.font.body
                       font.bold: true
+
+                      MouseArea {
+                        anchors.fill: parent
+                        cursorShape: Qt.IBeamCursor
+                        onClicked: root.startRename(card.flight.key)
+                      }
                     }
 
                     Text {
                       anchors.baseline: numberText.baseline
+                      width: Math.max(0, Math.min(implicitWidth, cardHeader.leftWidth - numberText.width - Style.spacing.md))
+                      elide: Text.ElideRight
                       textFormat: Text.PlainText
-                      text: [card.row.airline, card.row.aircraft].filter(function(s) { return s }).join(" · ")
+                      text: (card.flight.title ? [card.row.number] : []).concat([card.row.airline, card.row.aircraft])
+                        .filter(function(s) { return s }).join(" · ")
                       color: root.faintColor
                       font.family: root.contentFontFamily
                       font.pixelSize: Style.font.caption
                     }
                   }
 
+                  TextField {
+                    id: cardTitleField
+                    visible: root.editingKey === card.flight.key
+                    anchors.left: parent.left
+                    anchors.verticalCenter: parent.verticalCenter
+                    width: cardHeader.leftWidth
+                    verticalPadding: Style.spacing.xs
+                    placeholderText: "Name " + card.row.number + ", e.g. Elizabeth's flight home"
+                    foreground: root.contentForeground
+                    accent: root.accentColor
+                    font.family: root.contentFontFamily
+                    onVisibleChanged: if (visible) {
+                      text = card.flight.title || ""
+                      Qt.callLater(function() { cardTitleField.forceActiveFocus(); cardTitleField.selectAll() })
+                    }
+                    onActiveFocusChanged: if (!activeFocus && visible) root.commitRename(card.flight.key, text)
+                    Keys.onPressed: function(event) {
+                      if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
+                        root.commitRename(card.flight.key, text); event.accepted = true
+                      } else if (event.key === Qt.Key_Escape) {
+                        root.cancelRename(); event.accepted = true
+                      }
+                    }
+                  }
+
                   Row {
+                    id: phaseRow
                     anchors.right: parent.right
                     anchors.verticalCenter: parent.verticalCenter
                     spacing: Style.spacing.md
@@ -752,31 +821,71 @@ Panel {
                 spacing: Style.spacing.sm
 
                 Item {
+                  id: planHeader
                   width: parent.width
-                  height: Math.max(planNumber.implicitHeight, planRemove.height)
+                  height: Math.max(planNumber.implicitHeight, planRemove.height,
+                                   planTitleField.visible ? planTitleField.implicitHeight : 0)
+                  readonly property real leftWidth: width - planRemove.width - Style.spacing.lg
 
                   Row {
                     anchors.left: parent.left
                     anchors.verticalCenter: parent.verticalCenter
                     spacing: Style.spacing.md
+                    visible: !planTitleField.visible
 
                     Text {
                       id: planNumber
+                      width: Math.min(implicitWidth, planHeader.leftWidth)
+                      elide: Text.ElideRight
                       textFormat: Text.PlainText
-                      text: planCard.plan.number
+                      text: planCard.plan.title || planCard.plan.number
                       color: root.contentForeground
                       font.family: root.contentFontFamily
                       font.pixelSize: Style.font.body
                       font.bold: true
+
+                      MouseArea {
+                        anchors.fill: parent
+                        cursorShape: Qt.IBeamCursor
+                        onClicked: root.startRename(planCard.plan.key)
+                      }
                     }
 
                     Text {
                       anchors.baseline: planNumber.baseline
+                      width: Math.max(0, Math.min(implicitWidth, planHeader.leftWidth - planNumber.width - Style.spacing.md))
+                      elide: Text.ElideRight
                       textFormat: Text.PlainText
-                      text: Model.dateText(planCard.plan.date) + " · " + Model.planRouteText(planCard.plan)
+                      text: (planCard.plan.title ? planCard.plan.number + " · " : "")
+                        + Model.dateText(planCard.plan.date) + " · " + Model.planRouteText(planCard.plan)
                       color: root.contentForeground
                       font.family: root.contentFontFamily
                       font.pixelSize: Style.font.bodySmall
+                    }
+                  }
+
+                  TextField {
+                    id: planTitleField
+                    visible: root.editingKey === planCard.plan.key
+                    anchors.left: parent.left
+                    anchors.verticalCenter: parent.verticalCenter
+                    width: planHeader.leftWidth
+                    verticalPadding: Style.spacing.xs
+                    placeholderText: "Name " + planCard.plan.number + ", e.g. Elizabeth's flight home"
+                    foreground: root.contentForeground
+                    accent: root.accentColor
+                    font.family: root.contentFontFamily
+                    onVisibleChanged: if (visible) {
+                      text = planCard.plan.title || ""
+                      Qt.callLater(function() { planTitleField.forceActiveFocus(); planTitleField.selectAll() })
+                    }
+                    onActiveFocusChanged: if (!activeFocus && visible) root.commitRename(planCard.plan.key, text)
+                    Keys.onPressed: function(event) {
+                      if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
+                        root.commitRename(planCard.plan.key, text); event.accepted = true
+                      } else if (event.key === Qt.Key_Escape) {
+                        root.cancelRename(); event.accepted = true
+                      }
                     }
                   }
 
@@ -881,7 +990,7 @@ Panel {
             wrapMode: Text.WordWrap
             text: root.service && root.service.lastError !== ""
               ? root.service.lastError
-              : "↓ to the list · x stops tracking · r refreshes · landed flights leave after "
+              : "↓ to the list · e names a flight · x stops tracking · r refreshes · landed flights leave after "
                 + (root.service ? root.service.dropAfterHours : 3) + "h"
             color: root.service && root.service.lastError !== "" ? root.urgentColor : root.faintColor
             font.family: root.contentFontFamily

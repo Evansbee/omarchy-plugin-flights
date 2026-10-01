@@ -96,8 +96,17 @@ function httpError(status) {
 
 var FLIGHT_RE = /^([A-Z]{3}|[A-Z][0-9]|[0-9][A-Z]|[A-Z]{2})\s*-?\s*([0-9]{1,4}[A-Z]?)(?![0-9])/
 
+// A name for the flight, in double or curly quotes anywhere in the text:
+// DL2402 "Elizabeth's flight home". Single quotes are left alone so an
+// apostrophe can live inside the name.
+var TITLE_RE = /["“”]([^"“”]*)["“”]?/
+
 function parseQuery(text, nowSec) {
-  var raw = String(text || "").trim().toUpperCase()
+  var original = String(text || "")
+  var titleMatch = TITLE_RE.exec(original)
+  var title = titleMatch ? cleanTitle(titleMatch[1]) : ""
+  if (titleMatch) original = original.slice(0, titleMatch.index) + " " + original.slice(titleMatch.index + titleMatch[0].length)
+  var raw = original.trim().toUpperCase()
   if (raw === "") return { ok: false, error: "Type a flight number, like UA1" }
 
   var match = FLIGHT_RE.exec(raw)
@@ -125,7 +134,18 @@ function parseQuery(text, nowSec) {
   }
   if (airports.length > 2) return { ok: false, error: "At most two airports: from and to" }
 
-  return { ok: true, number: number, airports: airports, date: date }
+  return { ok: true, number: number, airports: airports, date: date, title: title }
+}
+
+function cleanTitle(text) {
+  return String(text || "").replace(/\s+/g, " ").trim().slice(0, 60)
+}
+
+// What to call a flight in notifications and the tooltip: its name with
+// the number alongside, or just the number.
+function displayName(tracked) {
+  var number = tracked.row ? tracked.row.number : tracked.number
+  return tracked.title ? tracked.title + " (" + number + ")" : number
 }
 
 // A calendar day as {y, m, d}, compared later against the *origin's* local
@@ -501,9 +521,10 @@ function flightKey(row) {
   return row.number + "|" + row.origin.iata + "|" + row.schedDep
 }
 
-function newTracked(row, nowSec) {
+function newTracked(row, nowSec, title) {
   return {
     key: flightKey(row),
+    title: cleanTitle(title),
     number: row.number,
     origin: row.origin.iata,
     destination: row.destination.iata,
@@ -641,6 +662,7 @@ function applyPoll(tracked, listRow, detail, nowSec, thresholdMinutes) {
   var told = {}
   for (var t in tracked.told) told[t] = tracked.told[t]
   var events = []
+  var who = displayName(next)
   var threshold = Math.max(1, Number(thresholdMinutes) || 5) * MINUTE
 
   if (phase !== told.phase) {
@@ -653,7 +675,7 @@ function applyPoll(tracked, listRow, detail, nowSec, thresholdMinutes) {
   var departed = !!row.realDep || phaseRank(phase) >= phaseRank("airborne")
   if (!departed && !isTroublePhase(phase) && Math.abs(dep - told.dep) >= threshold) {
     events.push({
-      title: row.number + " departure " + (dep > told.dep ? "delayed" : "moved earlier"),
+      title: who + " departure " + (dep > told.dep ? "delayed" : "moved earlier"),
       body: "Now " + clock(dep, row.origin) + " from " + row.origin.iata
         + " (was " + clock(told.dep, row.origin) + ")" + delaySuffix(delayMinutes(row)),
       urgency: dep - row.schedDep >= HOUR ? "critical" : "normal"
@@ -669,7 +691,7 @@ function applyPoll(tracked, listRow, detail, nowSec, thresholdMinutes) {
     told.arr = arr
   } else if (phase !== "landed" && !isTroublePhase(phase) && Math.abs(arr - told.arr) >= threshold) {
     events.push({
-      title: row.number + " arrival " + (arr > told.arr ? "later" : "earlier"),
+      title: who + " arrival " + (arr > told.arr ? "later" : "earlier"),
       body: "Now " + arrivalClock(row) + " in " + row.destination.iata
         + " (was " + clock(told.arr, row.destination) + ")",
       urgency: "normal"
@@ -681,7 +703,7 @@ function applyPoll(tracked, listRow, detail, nowSec, thresholdMinutes) {
 
   if (!departed && row.origin.gate && row.origin.gate !== told.depGate) {
     events.push({
-      title: row.number + (told.depGate ? " gate change" : " gate assigned"),
+      title: who + (told.depGate ? " gate change" : " gate assigned"),
       body: "Departs " + row.origin.iata + " from " + gateText(row.origin)
         + (told.depGate ? " (was " + told.depGate + ")" : ""),
       urgency: told.depGate ? "critical" : "normal"
@@ -691,7 +713,7 @@ function applyPoll(tracked, listRow, detail, nowSec, thresholdMinutes) {
 
   if (phase !== "landed" && row.destination.gate && row.destination.gate !== told.arrGate) {
     events.push({
-      title: row.number + " arrival gate " + row.destination.gate,
+      title: who + " arrival gate " + row.destination.gate,
       body: "Arrives " + row.destination.iata + " at " + gateText(row.destination)
         + (told.arrGate ? " (was " + told.arrGate + ")" : ""),
       urgency: "normal"
@@ -720,25 +742,26 @@ function phaseRank(phase) {
 
 function phaseNotification(tracked, previous) {
   var row = tracked.row
+  var who = displayName(tracked)
   var route = row.origin.iata + " → " + row.destination.iata
   switch (tracked.phase) {
   case "gate":
     return null  // FR24 picking up a transponder at the gate is not news.
   case "taxiing":
-    return { title: row.number + " is taxiing", body: route + " · leaving " + row.origin.iata
+    return { title: who + " is taxiing", body: route + " · leaving " + row.origin.iata
       + (row.origin.gate ? " gate " + row.origin.gate : ""), urgency: "normal" }
   case "airborne":
-    return { title: row.number + " took off", body: route + " · lands "
+    return { title: who + " took off", body: route + " · lands "
       + arrivalClock(row) + " " + row.destination.tzAbbr, urgency: "normal" }
   case "landed":
-    return { title: row.number + " landed in " + (row.destination.city || row.destination.iata),
+    return { title: who + " landed in " + (row.destination.city || row.destination.iata),
       body: route + " · " + clock(landedAt(row) || arrivalTime(row), row.destination)
         + (row.destination.gate ? " · gate " + row.destination.gate : ""), urgency: "normal" }
   case "canceled":
-    return { title: row.number + " was canceled", body: route + " · was due out "
+    return { title: who + " was canceled", body: route + " · was due out "
       + clock(row.schedDep, row.origin), urgency: "critical" }
   case "diverted":
-    return { title: row.number + " diverted", body: route + " · " + row.statusText, urgency: "critical" }
+    return { title: who + " diverted", body: route + " · " + row.statusText, urgency: "critical" }
   default:
     return null
   }
@@ -807,6 +830,7 @@ function guessRoute(rows, airports) {
 function newPlan(query, rows, nowSec) {
   var plan = {
     number: query.number,
+    title: cleanTitle(query.title),
     date: query.date,
     airports: query.airports || [],
     addedAt: nowSec,
@@ -864,7 +888,7 @@ function plansTooltip(plans, nowSec) {
   if (!plans || plans.length === 0) return ""
   var parts = []
   for (var i = 0; i < plans.length; i++)
-    parts.push(plans[i].number + " " + dateText(plans[i].date))
+    parts.push((plans[i].title || plans[i].number) + " " + dateText(plans[i].date))
   return "Upcoming: " + parts.join(", ")
 }
 
@@ -1030,7 +1054,7 @@ function tooltip(flights, nowSec, error) {
   var lines = []
   for (var i = 0; i < flights.length; i++) {
     var f = flights[i]
-    lines.push(f.row.number + "  " + f.row.origin.iata + "→" + f.row.destination.iata + "  " + statusLine(f, nowSec))
+    lines.push(displayName(f) + "  " + f.row.origin.iata + "→" + f.row.destination.iata + "  " + statusLine(f, nowSec))
   }
   if (error) lines.push(error)
   return lines.join("\n")

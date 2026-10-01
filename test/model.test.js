@@ -13,7 +13,7 @@ const M = new Function(source + "\nreturn {" + [
   "parseQuery", "parseList", "parseDetail", "resolve", "phaseOf", "newTracked",
   "applyPoll", "findRow", "isExpired", "expiresAt", "pollInterval", "clock",
   "dayLabel", "statusLine", "focusFlight", "icon", "progress", "parseState", "serializeState",
-  "splitResponse", "curlArgv", "shouldPlan", "newPlan", "planDue", "planExpired", "planRouteText", "durationLabel", "arrivalTime", "arrivalProjected", "dayShift", "arrivalClock", "duration", "wantsDetail"
+  "splitResponse", "curlArgv", "shouldPlan", "newPlan", "planDue", "planExpired", "planRouteText", "durationLabel", "displayName", "arrivalTime", "arrivalProjected", "dayShift", "arrivalClock", "duration", "wantsDetail"
 ].join(",") + "}")()
 
 const fixture = (name) => fs.readFileSync(path.join(__dirname, "fixtures", name), "utf8")
@@ -248,6 +248,23 @@ test("dayShift: arrival's calendar day against departure's, each local", () => {
   const dl = { origin: edt, destination: phl, schedDep: 1790824140, schedArr: 1790829960 } // 11:09 PM → 12:46 AM
   assert.equal(M.dayShift(dl), 1)
   assert.equal(M.dayShift(Object.assign({}, dl, { schedArr: dl.schedDep + 600 })), 0)
+})
+
+test("titles: quoted in the query, used in notifications", () => {
+  const q = M.parseQuery('DL2402 "Elizabeth\'s Flight Home" 10/3', NOW)
+  assert.equal(q.number, "DL2402")
+  assert.equal(q.title, "Elizabeth's Flight Home")
+  assert.deepEqual(q.date, { y: 2026, m: 10, d: 3 })
+  assert.equal(M.parseQuery("“Mom” UA1", NOW).title, "Mom")
+  assert.equal(M.parseQuery("UA1", NOW).title, "")
+
+  const row = scheduledUA1()
+  const named = primed(M.newTracked(row, NOW, "  Elizabeth's   Flight Home "))
+  assert.equal(named.title, "Elizabeth's Flight Home")
+  assert.equal(M.displayName(named), "Elizabeth's Flight Home (UA1)")
+  const out = M.applyPoll(named, Object.assign({}, row, { estDep: row.schedDep + 30 * 60 }), null, NOW + 60, 5)
+  assert.match(out.events[0].title, /^Elizabeth's Flight Home \(UA1\) departure delayed/)
+  assert.equal(M.displayName(primed(M.newTracked(row, NOW))), "UA1")
 })
 
 test("parseQuery: month names, even ones that are also airports", () => {

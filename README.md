@@ -28,6 +28,13 @@ popup:  ✈ Flights                    🔔 Notify on changes  [■]
 | `WN302 MCI-AUS` | That exact leg. |
 | `DL1 10/3`, `DL1 Dec 15`, `DL1 2026-10-03`, `DL1 tomorrow` | That day's departure. The date is matched in the **origin airport's** local time, which is the date printed on the boarding pass. A date with no year that has already passed means next year. |
 
+Add a name in double quotes anywhere in the text, like
+`DL2402 "Elizabeth's flight home"` or `UA1 Dec 15 "Holiday trip"`. The name
+becomes the card's heading and is used in notifications
+("Elizabeth's flight home (DL2402) took off"). To rename a flight later,
+click its name or press `e` on it. Saving an empty name goes back to the
+flight number.
+
 Flight numbers can be written as `UA1`, `ua 1`, or `AA0100`. A daily flight
 repeats every 24 hours, so it never triggers the question. The question only
 comes up when one number flies different routes within 18 hours of each
@@ -114,6 +121,7 @@ Free is missing too, it uses the bar's Nerd Font.
 | `↓` / `↑` | Move between the box and the list |
 | `Enter` on a choice | Track that leg |
 | `x` on a flight | Stop tracking it (an × also appears on hover) |
+| Click a flight's name, or `e` | Rename it (`Enter` saves, `Esc` cancels) |
 | `r` | Refresh everything |
 | `Esc` | Dismiss the question, or close |
 
@@ -169,6 +177,7 @@ The service answers over IPC:
 omarchy-shell flights status            # every flight: phase, times, next poll
 omarchy-shell flights track "WN302 AUS" # same as typing it in the box
 omarchy-shell flights remove "UA1|SFO|1790833200"
+omarchy-shell flights rename "UA1|SFO|1790833200" "Elizabeth's flight home"
 omarchy-shell flights refresh           # re-poll everything now
 omarchy-shell flights notify false      # the panel's switch
 omarchy-shell flights testNotification  # fire a sample notification
