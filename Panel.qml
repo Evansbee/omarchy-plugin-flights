@@ -140,6 +140,9 @@ Panel {
     // the next time the plane is clicked.
     if (!opened) {
       root.editingKey = ""
+      // A half-typed query from last time is never what the next click on
+      // the plane is for.
+      if (!(root.service && root.service.lookupBusy)) queryField.text = ""
       if (root.choosing && root.service) root.service.cancelLookup()
       return
     }

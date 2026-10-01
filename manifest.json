@@ -5,7 +5,7 @@
   "version": "1.0.0",
   "author": "evansbee",
   "license": "MIT",
-  "homepage": "https://github.com/evansbee/omarchy-plugin-flights",
+  "homepage": "https://github.com/Evansbee/omarchy-plugin-flights",
   "description": "Track flights from the bar: live status, delays, gates, and notifications when anything changes",
   "kinds": [
     "service",
