@@ -41,7 +41,7 @@
       {
         "key": "animate",
         "type": "boolean",
-        "label": "Pulse the plane while tracking"
+        "label": "Breathe the plane while a flight is in the air"
       },
       {
         "key": "iconFont",

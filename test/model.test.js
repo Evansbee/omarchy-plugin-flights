@@ -12,7 +12,7 @@ const source = fs.readFileSync(path.join(__dirname, "..", "Model.js"), "utf8")
 const M = new Function(source + "\nreturn {" + [
   "parseQuery", "parseList", "parseDetail", "resolve", "phaseOf", "newTracked",
   "applyPoll", "findRow", "isExpired", "expiresAt", "pollInterval", "clock",
-  "dayLabel", "statusLine", "focusFlight", "barAlert", "icon", "progress", "parseState", "serializeState",
+  "dayLabel", "statusLine", "focusFlight", "icon", "progress", "parseState", "serializeState",
   "splitResponse", "curlArgv", "duration", "wantsDetail"
 ].join(",") + "}")()
 
@@ -244,9 +244,6 @@ test("bar: the icon speaks for the loudest flight", () => {
   assert.equal(M.focusFlight([waiting, flying]), flying)
   assert.equal(M.focusFlight([flying, canceled]), canceled)
 
-  assert.equal(M.barAlert(waiting), false)
-  assert.equal(M.barAlert(Object.assign({}, waiting, { row: Object.assign({}, row, { estDep: row.schedDep + 20 * 60 }) })), true)
-  assert.equal(M.barAlert(canceled), true)
 })
 
 test("curl response status is split from the body", () => {

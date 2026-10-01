@@ -818,16 +818,6 @@ function focusFlight(flights) {
   return best
 }
 
-// Whether the bar's pulse should be the urgent color: something has gone
-// wrong, or the flight is running 15 minutes or more behind.
-function barAlert(flight) {
-  if (!flight) return false
-  if (isTroublePhase(flight.phase)) return true
-  if (flight.phase === "landed") return false
-  if (phaseRank(flight.phase) < phaseRank("airborne")) return delayMinutes(flight.row) >= 15
-  return arrivalDelayMinutes(flight.row) >= 15
-}
-
 function tooltip(flights, nowSec, error) {
   if (!flights || flights.length === 0)
     return error ? error : "Flights · click to track one"
