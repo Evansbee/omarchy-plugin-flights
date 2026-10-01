@@ -214,6 +214,15 @@ Panel {
                 anchors.verticalCenter: parent.verticalCenter
                 textFormat: Text.PlainText
                 text: "Notify on changes"
+
+                HoverHandler { id: notifyHover }
+
+                PanelToolTip {
+                  visible: notifyHover.hovered
+                  text: "Departure or arrival time moving " + (root.service ? root.service.changeMinutes : 5)
+                    + "+ min, gate changes, taxi, takeoff, landing, cancellations, diversions"
+                  fontFamily: root.contentFontFamily
+                }
                 color: root.dimColor
                 font.family: root.contentFontFamily
                 font.pixelSize: Style.font.bodySmall
@@ -637,12 +646,37 @@ Panel {
                         anchors.bottom: parent.bottom
                       }
                       Text {
+                        id: arrClock
                         textFormat: Text.PlainText
                         text: Model.clock(Model.arrivalTime(card.row), card.row.destination)
                         color: card.lateArr >= 15 && card.flight.phase !== "landed" ? root.urgentColor : root.contentForeground
                         font.family: root.contentFontFamily
                         font.pixelSize: Style.font.body
                         font.bold: true
+                      }
+
+                      // "+1": lands on a later calendar day than it left, each
+                      // in its own airport's time. A filled pill in the theme
+                      // accent, so it still stands out in a grayscale theme.
+                      Rectangle {
+                        readonly property string label: Model.dayShiftText(Model.dayShift(card.row))
+                        visible: label !== ""
+                        anchors.verticalCenter: arrClock.verticalCenter
+                        width: shiftText.implicitWidth + Style.spacing.sm * 2
+                        height: shiftText.implicitHeight
+                        radius: Math.min(height / 2, Style.cornerRadius > 0 ? height / 2 : 2)
+                        color: root.accentColor
+
+                        Text {
+                          id: shiftText
+                          anchors.centerIn: parent
+                          textFormat: Text.PlainText
+                          text: parent.label
+                          color: Color.popups.background
+                          font.family: root.contentFontFamily
+                          font.pixelSize: Style.font.caption
+                          font.bold: true
+                        }
                       }
                     }
 

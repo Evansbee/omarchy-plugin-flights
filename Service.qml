@@ -33,7 +33,7 @@ Item {
 
   // ---- Settings, pushed in by the bar widget from its shell.json entry.
   property real dropAfterHours: 3
-  property int changeMinutes: 10
+  property int changeMinutes: 5
 
   function applySettings(settings) {
     var s = settings || {}

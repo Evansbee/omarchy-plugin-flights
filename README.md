@@ -44,6 +44,15 @@ you get a notification. If that day's number flies more than one route, the
 card asks you to pick one and sends a notification. Upcoming entries that
 never appeared are dropped a day after their date.
 
+## The cards
+
+Each card shows the route line with the plane at its current position, and
+a duration under the line: the full flight length before departure, the time
+left in the air, and the time flown after landing. Times are 12-hour, in each
+airport's local time. A changed time shows the timetable time struck through
+beside it. An arrival that lands on a later calendar day than it left gets a
+**+1** badge (+2, or −1 across the dateline) in the theme's accent color.
+
 ## What it watches
 
 The status of each flight moves through these stages:
@@ -61,7 +70,7 @@ any of the following:
   anything happens.
 - **Departure time** moving by `changeMinutes` or more. Once the flight has
   departed, departure-time changes are no longer announced.
-- **Arrival time** moving by `changeMinutes` or more. Flightradar24 often
+- **Arrival time** moving by `changeMinutes` or more (5 minutes by default). Flightradar24 often
   moves a delayed departure before it publishes a new arrival estimate. Until
   it does, the arrival is projected forward by the same delay and labeled
   *Projected*. That projection isn't announced separately, because the
@@ -120,7 +129,7 @@ Per-widget settings go inline on the widget's entry in
 | Key | Default | Meaning |
 |---|---|---|
 | `dropAfterHours` | `3` | Hours a landed flight stays on the list. |
-| `changeMinutes` | `10` | How far a departure or arrival time must move before it is announced again. |
+| `changeMinutes` | `5` | How far a departure or arrival time must move before it is announced again. |
 | `animate` | `true` | Breathe the plane while a tracked flight is in the air. |
 | `iconFont` | `"~/Resources/fontawesome_font/otfs/Font Awesome 7 Pro-Solid-900.otf"` | Font Awesome Pro font file. Set it to `""` to use the Free icons. |
 

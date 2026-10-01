@@ -13,7 +13,7 @@ const M = new Function(source + "\nreturn {" + [
   "parseQuery", "parseList", "parseDetail", "resolve", "phaseOf", "newTracked",
   "applyPoll", "findRow", "isExpired", "expiresAt", "pollInterval", "clock",
   "dayLabel", "statusLine", "focusFlight", "icon", "progress", "parseState", "serializeState",
-  "splitResponse", "curlArgv", "shouldPlan", "newPlan", "planDue", "planExpired", "planRouteText", "durationLabel", "arrivalTime", "arrivalProjected", "duration", "wantsDetail"
+  "splitResponse", "curlArgv", "shouldPlan", "newPlan", "planDue", "planExpired", "planRouteText", "durationLabel", "arrivalTime", "arrivalProjected", "dayShift", "arrivalClock", "duration", "wantsDetail"
 ].join(",") + "}")()
 
 const fixture = (name) => fs.readFileSync(path.join(__dirname, "fixtures", name), "utf8")
@@ -238,6 +238,16 @@ test("arrival slides with a late departure until FR24 estimates it", () => {
   assert.equal(M.arrivalTime(Object.assign({}, row, { estArr: 1790830000 })), 1790830000)
   assert.equal(M.arrivalProjected(Object.assign({}, row, { estArr: 1790830000 })), false)
   assert.equal(M.arrivalProjected(Object.assign({}, row, { estDep: 0 })), false)
+})
+
+test("dayShift: arrival's calendar day against departure's, each local", () => {
+  const ua1 = scheduledUA1()                     // 10:40 PM PDT → 6:15 AM SGT, two days on
+  assert.equal(M.dayShift(ua1), 2)
+  assert.match(M.arrivalClock(ua1), /\(\+2\)$/)
+  const edt = { tzOffset: -4 * HOUR, iata: "DTW" }, phl = { tzOffset: -4 * HOUR, iata: "PHL" }
+  const dl = { origin: edt, destination: phl, schedDep: 1790824140, schedArr: 1790829960 } // 11:09 PM → 12:46 AM
+  assert.equal(M.dayShift(dl), 1)
+  assert.equal(M.dayShift(Object.assign({}, dl, { schedArr: dl.schedDep + 600 })), 0)
 })
 
 test("parseQuery: month names, even ones that are also airports", () => {

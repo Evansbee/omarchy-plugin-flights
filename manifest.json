@@ -23,7 +23,7 @@
     "defaultSection": "right",
     "defaults": {
       "dropAfterHours": 3,
-      "changeMinutes": 10,
+      "changeMinutes": 5,
       "animate": true,
       "iconFont": "~/Resources/fontawesome_font/otfs/Font Awesome 7 Pro-Solid-900.otf"
     },

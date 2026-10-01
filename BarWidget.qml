@@ -23,7 +23,7 @@ BarWidget {
   // ---- Settings (see manifest.json for the defaults these mirror).
   readonly property bool animate: setting("animate", true) !== false
   readonly property real dropAfterHours: Number(setting("dropAfterHours", 3))
-  readonly property int changeMinutes: Number(setting("changeMinutes", 10)) || 10
+  readonly property int changeMinutes: Number(setting("changeMinutes", 5)) || 5
   readonly property string iconFontPath: {
     var path = String(setting("iconFont", "~/Resources/fontawesome_font/otfs/Font Awesome 7 Pro-Solid-900.otf"))
     return path.indexOf("~/") === 0 ? Quickshell.env("HOME") + path.slice(1) : path

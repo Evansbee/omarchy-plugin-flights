@@ -641,7 +641,7 @@ function applyPoll(tracked, listRow, detail, nowSec, thresholdMinutes) {
   var told = {}
   for (var t in tracked.told) told[t] = tracked.told[t]
   var events = []
-  var threshold = Math.max(1, Number(thresholdMinutes) || 10) * MINUTE
+  var threshold = Math.max(1, Number(thresholdMinutes) || 5) * MINUTE
 
   if (phase !== told.phase) {
     var phaseEvent = phaseNotification(next, told.phase)
@@ -670,7 +670,7 @@ function applyPoll(tracked, listRow, detail, nowSec, thresholdMinutes) {
   } else if (phase !== "landed" && !isTroublePhase(phase) && Math.abs(arr - told.arr) >= threshold) {
     events.push({
       title: row.number + " arrival " + (arr > told.arr ? "later" : "earlier"),
-      body: "Now " + clock(arr, row.destination) + " in " + row.destination.iata
+      body: "Now " + arrivalClock(row) + " in " + row.destination.iata
         + " (was " + clock(told.arr, row.destination) + ")",
       urgency: "normal"
     })
@@ -729,7 +729,7 @@ function phaseNotification(tracked, previous) {
       + (row.origin.gate ? " gate " + row.origin.gate : ""), urgency: "normal" }
   case "airborne":
     return { title: row.number + " took off", body: route + " · lands "
-      + clock(arrivalTime(row), row.destination) + " " + row.destination.tzAbbr, urgency: "normal" }
+      + arrivalClock(row) + " " + row.destination.tzAbbr, urgency: "normal" }
   case "landed":
     return { title: row.number + " landed in " + (row.destination.city || row.destination.iata),
       body: route + " · " + clock(landedAt(row) || arrivalTime(row), row.destination)
@@ -880,6 +880,28 @@ function progress(tracked, nowSec) {
   var end = arrivalTime(row)
   if (!start || end <= start) return 0.5
   return Math.max(0.02, Math.min(0.98, (nowSec - start) / (end - start)))
+}
+
+// Calendar days between leaving and landing, each in its own airport's zone:
+// 1 for a red-eye or most long-hauls, 2 for some flights across the
+// dateline westbound, -1 for eastbound across it (Asia to the Americas).
+function dayShift(row) {
+  var dep = departureTime(row), arr = arrivalTime(row)
+  if (!dep || !arr) return 0
+  var a = new Date((dep + row.origin.tzOffset) * 1000)
+  var b = new Date((arr + row.destination.tzOffset) * 1000)
+  return Math.round((Date.UTC(b.getUTCFullYear(), b.getUTCMonth(), b.getUTCDate())
+    - Date.UTC(a.getUTCFullYear(), a.getUTCMonth(), a.getUTCDate())) / 86400000)
+}
+
+function dayShiftText(shift) {
+  return shift > 0 ? "+" + shift : (shift < 0 ? String(shift) : "")
+}
+
+// "12:46 AM (+1)" for notifications, where there's no badge to draw.
+function arrivalClock(row) {
+  var shift = dayShiftText(dayShift(row))
+  return clock(arrivalTime(row), row.destination) + (shift ? " (" + shift + ")" : "")
 }
 
 // The label in the middle of the route line: how long the flight is before
